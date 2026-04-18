@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Claude Code statusline script — writes rate_limits to a temp file for the vibecoding-voice server.
+// Claude Code statusline script — writes rate_limits to a temp file for the vibecoding-plus server.
 // Configure in ~/.claude/settings.json:
-//   { "statusLine": { "type": "command", "command": "node D:/github/vibecoding-voice/scripts/claude-statusline.mjs" } }
+//   { "statusLine": { "type": "command", "command": "node D:/github/vibecoding-plus/scripts/claude-statusline.mjs" } }
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const CACHE_FILE = path.join(os.tmpdir(), "vibecoding-claude-rate-limits.json");
+const CACHE_FILE = path.join(os.tmpdir(), "vibecoding-plus-claude-rate-limits.json");
 
 let input = "";
 process.stdin.on("data", (chunk) => {

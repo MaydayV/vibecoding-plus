@@ -36,13 +36,393 @@ applyRateLimitSnapshot(readLatestRateLimits());
 const MIN_PLAUSIBLE_EPOCH_MS = Date.UTC(2020, 0, 1);
 const VALID_SEND_TARGETS = new Set(["text_injector", "codex_exec", "claude_code"]);
 
+const MAX_PLAN_OPTIONS = 8;
+const LOCALHOST_REMOTE_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const TODO_PENDING_INTENTS_PATH = path.join(path.dirname(getUserTodoListPath()), "todo-pending-intents.json");
+const PCM_SAMPLE_RATE = 16000;
+const PCM_BYTES_PER_SAMPLE = 2;
+
+let cliDispatchLock = Promise.resolve();
+let cliLogTailFlushTimer = null;
+const pendingTodoIntentByDevice = loadPendingTodoIntentByDevice();
+
+function loadPendingTodoIntentByDevice() {
+  try {
+    if (!fs.existsSync(TODO_PENDING_INTENTS_PATH)) {
+      return new Map();
+    }
+    const parsed = JSON.parse(fs.readFileSync(TODO_PENDING_INTENTS_PATH, "utf8"));
+    if (!parsed || typeof parsed !== "object") {
+      return new Map();
+    }
+    const entries = Object.entries(parsed)
+      .filter(([deviceId, entry]) => {
+        if (!deviceId || !entry || typeof entry !== "object") {
+          return false;
+        }
+        if (!entry.pendingIntent || typeof entry.pendingIntent !== "object") {
+          return false;
+        }
+        const expiresAt = Number(entry.expiresAt);
+        return Number.isFinite(expiresAt) && expiresAt > Date.now();
+      })
+      .map(([deviceId, entry]) => [deviceId, entry]);
+    return new Map(entries);
+  } catch {
+    return new Map();
+  }
+}
+
+function persistPendingTodoIntentByDevice() {
+  try {
+    const now = Date.now();
+    const payload = {};
+    for (const [deviceId, entry] of pendingTodoIntentByDevice.entries()) {
+      if (!deviceId || !entry || typeof entry !== "object") {
+        continue;
+      }
+      if (!entry.pendingIntent || typeof entry.pendingIntent !== "object") {
+        continue;
+      }
+      const expiresAt = Number(entry.expiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+        continue;
+      }
+      payload[deviceId] = {
+        pendingIntent: entry.pendingIntent,
+        expiresAt
+      };
+    }
+    fs.mkdirSync(path.dirname(TODO_PENDING_INTENTS_PATH), { recursive: true });
+    fs.writeFileSync(TODO_PENDING_INTENTS_PATH, `${JSON.stringify(payload)}\n`, "utf8");
+  } catch {
+    // ignore
+  }
+}
+
+function isWsReadyForJson(ws) {
+  return Boolean(ws && ws.readyState === WebSocket.OPEN);
+}
+
+function sendJsonIfOpen(ws, payload) {
+  if (!isWsReadyForJson(ws)) {
+    return false;
+  }
+  try {
+    ws.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function restorePendingTodoIntentForState(state) {
+  if (!state) {
+    return;
+  }
+  const deviceId = String(state.deviceId || "").trim();
+  if (!deviceId) {
+    return;
+  }
+  const entry = pendingTodoIntentByDevice.get(deviceId);
+  if (!entry) {
+    return;
+  }
+  const expiresAt = Number(entry.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    pendingTodoIntentByDevice.delete(deviceId);
+    persistPendingTodoIntentByDevice();
+    return;
+  }
+  state.pendingTodoIntent = entry.pendingIntent;
+  state.pendingTodoIntentExpiresAt = expiresAt;
+}
+
+function queueCliDispatch(task) {
+  const run = async () => {
+    try {
+      return await task();
+    } catch (error) {
+      throw error;
+    }
+  };
+  const next = cliDispatchLock.then(run, run);
+  cliDispatchLock = next.then(() => undefined, () => undefined);
+  return next;
+}
+
+function scheduleCliLogTailFlush() {
+  if (cliLogTailFlushTimer) {
+    return;
+  }
+  const delayMs = Math.max(100, Number(config.terminalMirrorIntervalMs) || 800);
+  cliLogTailFlushTimer = setTimeout(() => {
+    cliLogTailFlushTimer = null;
+    broadcastJson({
+      type: "cli_log_tail",
+      lines: cliView.logLines
+    });
+  }, delayMs);
+  cliLogTailFlushTimer.unref?.();
+}
+
+function extractJsonObjectsFromText(text) {
+  const source = String(text || "");
+  const matches = source.match(/```json\s*([\s\S]*?)```/giu) || [];
+  const jsonBlocks = matches
+    .map((block) => block.replace(/^```json\s*/iu, "").replace(/```$/u, "").trim())
+    .filter(Boolean);
+
+  const candidates = [...jsonBlocks];
+  const firstBrace = source.indexOf("{");
+  const lastBrace = source.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(source.slice(firstBrace, lastBrace + 1));
+  }
+
+  const objects = [];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (item && typeof item === "object") {
+            objects.push(item);
+          }
+        }
+      } else if (parsed && typeof parsed === "object") {
+        objects.push(parsed);
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return objects;
+}
+
+function extractPlanOptionsFromJsonText(text) {
+  const objects = extractJsonObjectsFromText(text);
+  if (objects.length === 0) {
+    return [];
+  }
+
+  const candidates = [];
+  for (const object of objects) {
+    const planArray = Array.isArray(object.plan)
+      ? object.plan
+      : Array.isArray(object.Plan)
+        ? object.Plan
+        : null;
+    if (planArray) {
+      for (const item of planArray) {
+        if (typeof item === "string") {
+          candidates.push(item);
+          continue;
+        }
+        if (item && typeof item === "object") {
+          candidates.push(item.text || item.title || item.step || item.item || "");
+        }
+      }
+    }
+
+    const optionsArray = Array.isArray(object.options)
+      ? object.options
+      : Array.isArray(object.planOptions)
+        ? object.planOptions
+        : null;
+    if (optionsArray) {
+      for (const item of optionsArray) {
+        if (typeof item === "string") {
+          candidates.push(item);
+          continue;
+        }
+        if (item && typeof item === "object") {
+          candidates.push(item.text || item.title || item.step || item.item || "");
+        }
+      }
+    }
+  }
+
+  return collectUniquePlanOptions(candidates);
+}
+
+function exceedsAudioDurationLimit(byteCount) {
+  const maxMs = Math.max(1000, Number(config.lanAudioMaxMs) || 120000);
+  const durationMs = (Number(byteCount || 0) / (PCM_SAMPLE_RATE * PCM_BYTES_PER_SAMPLE)) * 1000;
+  return durationMs > maxMs;
+}
+
 function getVoiceMode(state) {
   const mode = String(state?.voiceMode || "").trim().toLowerCase();
   return VALID_VOICE_MODES.has(mode) ? mode : "normal";
 }
-
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
+}
+
+function normalizePlanOptionText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collectUniquePlanOptions(candidates) {
+  const options = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const normalized = normalizePlanOptionText(candidate);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    options.push(normalized);
+    if (options.length >= MAX_PLAN_OPTIONS) {
+      break;
+    }
+  }
+  return options;
+}
+
+function extractPlanOptions(text) {
+  const fromJson = extractPlanOptionsFromJsonText(text);
+  if (fromJson.length > 0) {
+    return fromJson;
+  }
+
+  const rawLines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+
+  if (rawLines.length === 0) {
+    return [];
+  }
+
+  const checklist = [];
+  for (const line of rawLines) {
+    const match = line.match(/^[-*]\s*\[[ xX]\]\s+(.+)$/);
+    if (match) {
+      checklist.push(match[1]);
+    }
+  }
+  if (checklist.length > 0) {
+    return collectUniquePlanOptions(checklist);
+  }
+
+  const numbered = [];
+  let inPlanSection = false;
+  for (const line of rawLines) {
+    if (/^(?:#{1,6}\s*)?(?:\*\*)?(?:plan|方案)(?:\*\*)?\s*[:：]?$/i.test(line)) {
+      inPlanSection = true;
+      continue;
+    }
+
+    if (/^#{1,6}\s+/.test(line)) {
+      inPlanSection = false;
+      continue;
+    }
+
+    const numberedMatch = line.match(/^\d+[.)]\s+(.+)$/);
+    if (numberedMatch && (inPlanSection || numbered.length > 0)) {
+      numbered.push(numberedMatch[1]);
+      continue;
+    }
+
+    if (inPlanSection) {
+      const bulletMatch = line.match(/^[-*]\s+(.+)$/);
+      if (bulletMatch) {
+        numbered.push(bulletMatch[1]);
+      }
+    }
+  }
+
+  return collectUniquePlanOptions(numbered);
+}
+
+function getPlanOptionsPayload(state) {
+  const options = Array.isArray(state?.planOptions) ? state.planOptions : [];
+  const selectedIndex =
+    Number.isInteger(state?.planSelectedIndex) && state.planSelectedIndex >= 0
+      ? state.planSelectedIndex
+      : options.length > 0
+        ? 0
+        : -1;
+  return {
+    type: "plan_options",
+    options,
+    selectedIndex
+  };
+}
+
+function emitPlanOptions(ws) {
+  if (!ws?.clientState) {
+    return;
+  }
+  sendJson(ws, getPlanOptionsPayload(ws.clientState));
+}
+
+function clearPlanOptions(ws, state) {
+  if (!state) {
+    return;
+  }
+  state.planOptions = [];
+  state.planSelectedIndex = -1;
+  if (ws?.readyState === WebSocket.OPEN && state.authenticated) {
+    emitPlanOptions(ws);
+  }
+}
+
+function applyPlanOptions(ws, state, options) {
+  if (!state) {
+    return;
+  }
+  state.planOptions = options;
+  state.planSelectedIndex = options.length > 0 ? 0 : -1;
+  if (ws?.readyState === WebSocket.OPEN && state.authenticated) {
+    emitPlanOptions(ws);
+  }
+}
+
+function buildPlanApplyPrompt(selectedOption) {
+  const planLine = normalizePlanOptionText(selectedOption);
+  return [
+    "请按下面选中的方案执行。",
+    "不要输出思考过程，只输出两个部分：",
+    "## Plan",
+    "- [ ] ...",
+    "## Result",
+    "- ...",
+    "",
+    `选中方案：${planLine}`
+  ].join("\n");
+}
+
+function movePlanSelection(ws, state, delta) {
+  const options = Array.isArray(state?.planOptions) ? state.planOptions : [];
+  if (!state || options.length === 0) {
+    return null;
+  }
+
+  const current =
+    Number.isInteger(state.planSelectedIndex) && state.planSelectedIndex >= 0
+      ? state.planSelectedIndex
+      : 0;
+  const next = (current + delta + options.length) % options.length;
+  state.planSelectedIndex = next;
+  emitPlanOptions(ws);
+  return options[next] || null;
+}
+
+function getSelectedPlanOption(state) {
+  const options = Array.isArray(state?.planOptions) ? state.planOptions : [];
+  if (options.length === 0) {
+    return "";
+  }
+  const index =
+    Number.isInteger(state?.planSelectedIndex) && state.planSelectedIndex >= 0
+      ? Math.min(state.planSelectedIndex, options.length - 1)
+      : 0;
+  return String(options[index] || "").trim();
 }
 
 function printBanner() {
@@ -232,6 +612,11 @@ function clearPendingTodoIntent(state) {
     state.pendingTodoTimer = null;
   }
   if (state) {
+    const deviceId = String(state.deviceId || "").trim();
+    if (deviceId) {
+      pendingTodoIntentByDevice.delete(deviceId);
+      persistPendingTodoIntentByDevice();
+    }
     state.pendingTodoIntent = null;
     state.pendingTodoIntentExpiresAt = 0;
   }
@@ -249,8 +634,17 @@ function setPendingTodoIntent(ws, state, pendingIntent) {
 
   state.pendingTodoIntent = pendingIntent;
   state.pendingTodoIntentExpiresAt = Date.now() + config.todoFollowupTimeoutMs;
+  const deviceId = String(state.deviceId || "").trim();
+  if (deviceId) {
+    pendingTodoIntentByDevice.set(deviceId, {
+      pendingIntent,
+      expiresAt: state.pendingTodoIntentExpiresAt
+    });
+    persistPendingTodoIntentByDevice();
+  }
+
   state.pendingTodoTimer = setTimeout(() => {
-    if (ws.readyState !== WebSocket.OPEN || state.pendingTodoIntent !== pendingIntent) {
+    if (!isWsReadyForJson(ws) || state.pendingTodoIntent !== pendingIntent) {
       return;
     }
     clearPendingTodoIntent(state);
@@ -308,7 +702,7 @@ async function dispatchTodoPrompt(ws, prompt, state) {
 }
 
 function sendJson(ws, payload) {
-  ws.send(JSON.stringify(payload));
+  sendJsonIfOpen(ws, payload);
 }
 
 function broadcastJson(payload) {
@@ -326,11 +720,14 @@ function createClientState() {
     voiceMode: "normal",
     segmentActive: false,
     chunks: [],
+    audioBytes: 0,
     pendingSegments: [],
     pendingTranscript: "",
     pendingTodoIntent: null,
     pendingTodoIntentExpiresAt: 0,
-    pendingTodoTimer: null
+    pendingTodoTimer: null,
+    planOptions: [],
+    planSelectedIndex: -1
   };
 }
 
@@ -381,6 +778,7 @@ function emitCliSnapshot(ws) {
   });
   emitModeState(ws);
   emitTodoState(ws);
+  emitPlanOptions(ws);
 }
 
 function broadcastCliState() {
@@ -409,10 +807,7 @@ function broadcastCliSummary() {
 }
 
 function broadcastCliLogTail() {
-  broadcastJson({
-    type: "cli_log_tail",
-    lines: cliView.logLines
-  });
+  scheduleCliLogTailFlush();
 }
 
 function appendCliLog(line) {
@@ -490,9 +885,8 @@ function validateHello(message, remoteAddress) {
     return { ok: true };
   }
 
-  // Localhost connections bypass HMAC — allows terminal/browser console on same machine
   const addr = String(remoteAddress || "");
-  if (addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1") {
+  if (config.lanTrustLocalhost && LOCALHOST_REMOTE_ADDRESSES.has(addr)) {
     return { ok: true };
   }
 
@@ -578,7 +972,10 @@ function launchCodexPrompt(prompt) {
   });
 }
 
-async function runClaudePrompt(prompt) {
+async function runClaudePrompt(prompt, options = {}) {
+  const shouldExtractPlanOptions = Boolean(options.extractPlanOptions);
+  const planOptionsWs = options.planOptionsWs || null;
+  const planOptionsState = options.planOptionsState || null;
   cliView.latestUserText = prompt;
   cliView.latestAssistantText = "";
   setCliState({
@@ -594,13 +991,28 @@ async function runClaudePrompt(prompt) {
       setCliState(patch);
     },
     onSummary(patch) {
+      const normalizedAssistant = summarizeAssistantText(patch.latestAssistantText);
       setCliSummary({
         ...patch,
-        latestAssistantText: summarizeAssistantText(patch.latestAssistantText)
+        latestAssistantText: normalizedAssistant
       });
+
+      if (shouldExtractPlanOptions && planOptionsWs && planOptionsState) {
+        const optionsFromSummary = extractPlanOptions(normalizedAssistant);
+        if (optionsFromSummary.length > 0) {
+          applyPlanOptions(planOptionsWs, planOptionsState, optionsFromSummary);
+        }
+      }
     },
     onEvent(event) {
       appendCliLog(formatCodexEvent(event));
+
+      if (shouldExtractPlanOptions && planOptionsWs && planOptionsState && event?.type === "result") {
+        const optionsFromResult = extractPlanOptions(event.result || "");
+        if (optionsFromResult.length > 0) {
+          applyPlanOptions(planOptionsWs, planOptionsState, optionsFromResult);
+        }
+      }
     },
     onLogLine(line) {
       appendCliLog(line);
@@ -610,8 +1022,8 @@ async function runClaudePrompt(prompt) {
   refreshRateLimits();
 }
 
-function launchClaudePrompt(prompt) {
-  void runClaudePrompt(prompt).catch((error) => {
+function launchClaudePrompt(prompt, options = {}) {
+  void runClaudePrompt(prompt, options).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     log("claude error", message);
     appendCliLog(`error: ${message}`);
@@ -627,6 +1039,7 @@ async function finalizeSegment(ws, state) {
   const pcmBuffer = Buffer.concat(state.chunks);
   state.segmentActive = false;
   state.chunks = [];
+  state.audioBytes = 0;
   const voiceMode = getVoiceMode(state);
 
   if (pcmBuffer.length === 0) {
@@ -702,7 +1115,11 @@ async function finalizeSegment(ws, state) {
     }
     state.pendingTranscript = "";
     sendJson(ws, { type: "status", status: "typed", text: transcript });
-    launchClaudePrompt(transcript);
+    launchClaudePrompt(transcript, {
+      extractPlanOptions: true,
+      planOptionsWs: ws,
+      planOptionsState: state
+    });
     return;
   }
 
@@ -711,35 +1128,42 @@ async function finalizeSegment(ws, state) {
   sendJson(ws, { type: "status", status: "typed", text: transcript });
 }
 
-async function dispatchPrompt(prompt) {
-  if (config.sendTarget === "codex_exec") {
-    if (codexSession.isRunning()) {
-      throw new Error("Codex session is busy");
+async function dispatchPrompt(prompt, options = {}) {
+  return await queueCliDispatch(async () => {
+    if (config.sendTarget === "codex_exec") {
+      if (codexSession.isRunning()) {
+        throw new Error("Codex session is busy");
+      }
+      await runCodexPrompt(prompt);
+      return;
     }
-    await runCodexPrompt(prompt);
-    return;
-  }
 
-  if (config.sendTarget === "claude_code") {
-    if (claudeSession.isRunning()) {
-      throw new Error("Claude session is busy");
+    if (config.sendTarget === "claude_code") {
+      if (claudeSession.isRunning()) {
+        throw new Error("Claude session is busy");
+      }
+      await runClaudePrompt(prompt, options);
+      return;
     }
-    await runClaudePrompt(prompt);
-    return;
-  }
 
-  await injectText(prompt, config.textInjectionMode, {
-    dryRun: config.dryRunTextInjection
+    await injectText(prompt, config.textInjectionMode, {
+      dryRun: config.dryRunTextInjection
+    });
   });
 }
 
 async function dispatchUserPrompt(ws, prompt, state) {
+  clearPlanOptions(ws, state);
   if (getVoiceMode(state) === "todo") {
     await dispatchTodoPrompt(ws, prompt, state);
     return "todo";
   }
 
-  await dispatchPrompt(prompt);
+  await dispatchPrompt(prompt, {
+    extractPlanOptions: true,
+    planOptionsWs: ws,
+    planOptionsState: state
+  });
   return "normal";
 }
 
@@ -751,35 +1175,31 @@ async function sendPendingTranscript(ws, state) {
     return;
   }
 
-  if (voiceMode !== "todo" && config.sendTarget === "codex_exec" && codexSession.isRunning()) {
-    sendJson(ws, { type: "status", status: "cli_busy" });
-    return;
-  }
-
-  if (voiceMode !== "todo" && config.sendTarget === "claude_code" && claudeSession.isRunning()) {
-    sendJson(ws, { type: "status", status: "cli_busy" });
-    return;
-  }
-
-  state.pendingTranscript = "";
-  state.pendingSegments = [];
   if (voiceMode === "todo") {
+    state.pendingTranscript = "";
+    state.pendingSegments = [];
     await dispatchTodoPrompt(ws, transcript, state);
     return;
   }
 
+  try {
+    await dispatchPrompt(transcript, {
+      extractPlanOptions: true,
+      planOptionsWs: ws,
+      planOptionsState: state
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/busy/i.test(message)) {
+      sendJson(ws, { type: "status", status: "cli_busy" });
+      return;
+    }
+    throw error;
+  }
+
+  state.pendingTranscript = "";
+  state.pendingSegments = [];
   sendJson(ws, { type: "status", status: "typed", text: transcript });
-  if (config.sendTarget === "codex_exec") {
-    launchCodexPrompt(transcript);
-    return;
-  }
-
-  if (config.sendTarget === "claude_code") {
-    launchClaudePrompt(transcript);
-    return;
-  }
-
-  await dispatchPrompt(transcript);
 }
 
 function undoPendingTranscript(ws, state) {
@@ -839,7 +1259,24 @@ wss.on("connection", (ws, req) => {
 
       if (isBinary) {
         if (state.segmentActive) {
-          state.chunks.push(Buffer.from(data));
+          const chunk = Buffer.from(data);
+          const nextBytes = Number(state.audioBytes || 0) + chunk.length;
+          if (nextBytes > config.lanAudioMaxBytes || exceedsAudioDurationLimit(nextBytes)) {
+            state.segmentActive = false;
+            state.chunks = [];
+            state.audioBytes = 0;
+            sendJson(ws, {
+              type: "warning",
+              warning: "audio_too_large"
+            });
+            sendJson(ws, {
+              type: "status",
+              status: "audio_too_large"
+            });
+            return;
+          }
+          state.audioBytes = nextBytes;
+          state.chunks.push(chunk);
         }
         return;
       }
@@ -857,6 +1294,7 @@ wss.on("connection", (ws, req) => {
             }
           }
           state.authenticated = true;
+          restorePendingTodoIntentForState(state);
           log("hello", { deviceId: state.deviceId, boardType: message.boardType || "unknown" });
           sendJson(ws, { type: "hello_ack", deviceId: state.deviceId });
           emitServerReady(ws);
@@ -870,6 +1308,7 @@ wss.on("connection", (ws, req) => {
           log("ptt_start", state.deviceId);
           state.segmentActive = true;
           state.chunks = [];
+          state.audioBytes = 0;
           sendJson(ws, { type: "status", status: "recording" });
           break;
         case "ptt_stop":
@@ -896,6 +1335,62 @@ wss.on("connection", (ws, req) => {
           log("action_undo", state.deviceId);
           undoPendingTranscript(ws, state);
           break;
+        case "plan_select": {
+          if (!state.authenticated) {
+            closeWithAuthError(ws, state, "auth_required");
+            break;
+          }
+          const direction = String(message.direction || "").trim().toLowerCase();
+          if (!(direction === "prev" || direction === "next")) {
+            sendJson(ws, { type: "warning", warning: "invalid_plan_select_direction" });
+            break;
+          }
+          const selected = movePlanSelection(ws, state, direction === "prev" ? -1 : 1);
+          if (!selected) {
+            sendJson(ws, { type: "status", status: "no_plan_options" });
+          }
+          break;
+        }
+        case "plan_apply": {
+          if (!state.authenticated) {
+            closeWithAuthError(ws, state, "auth_required");
+            break;
+          }
+          if (config.sendTarget === "claude_code" && claudeSession.isRunning()) {
+            sendJson(ws, { type: "status", status: "cli_busy" });
+            break;
+          }
+          if (config.sendTarget === "codex_exec" && codexSession.isRunning()) {
+            sendJson(ws, { type: "status", status: "cli_busy" });
+            break;
+          }
+
+          const selectedOption = getSelectedPlanOption(state);
+          if (!selectedOption) {
+            sendJson(ws, { type: "status", status: "no_plan_options" });
+            break;
+          }
+
+          const applyPrompt = buildPlanApplyPrompt(selectedOption);
+          clearPlanOptions(ws, state);
+          sendJson(ws, { type: "status", status: "typed", text: applyPrompt });
+          if (config.sendTarget === "codex_exec") {
+            launchCodexPrompt(applyPrompt);
+          } else if (config.sendTarget === "claude_code") {
+            launchClaudePrompt(applyPrompt, {
+              extractPlanOptions: false,
+              planOptionsWs: ws,
+              planOptionsState: state
+            });
+          } else {
+            await dispatchPrompt(applyPrompt, {
+              extractPlanOptions: false,
+              planOptionsWs: ws,
+              planOptionsState: state
+            });
+          }
+          break;
+        }
         case "set_target": {
           if (!state.authenticated) {
             closeWithAuthError(ws, state, "auth_required");
@@ -1022,6 +1517,17 @@ wss.on("connection", (ws, req) => {
           });
           break;
         }
+        case "action_enter":
+          if (!state.authenticated) {
+            closeWithAuthError(ws, state, "auth_required");
+            break;
+          }
+          await injectText("", config.textInjectionMode, {
+            dryRun: config.dryRunTextInjection,
+            forceEnter: true
+          });
+          sendJson(ws, { type: "status", status: "typed", text: "" });
+          break;
         case "ping":
           sendJson(ws, { type: "pong", nowMs: Date.now() });
           break;
@@ -1074,3 +1580,5 @@ function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+

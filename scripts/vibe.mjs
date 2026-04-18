@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * vibe — unified launcher for vibecoding-voice.
+ * vibe — unified launcher for vibecoding-plus.
  *
  * Usage:
  *   vibe              # inject mode (default)

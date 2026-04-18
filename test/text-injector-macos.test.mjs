@@ -150,9 +150,9 @@ async function stopServer(child) {
   });
 }
 
-test("server routes transcripts using each client's own voice mode", async (t) => {
+test("server injects text on macOS when send target is text_injector", async (t) => {
   const port = await getFreePort();
-  const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibe-server-mode-"));
+  const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibe-server-macos-inject-"));
   const server = spawn(process.execPath, ["src/server.mjs"], {
     cwd: path.resolve("."),
     env: {
@@ -161,7 +161,7 @@ test("server routes transcripts using each client's own voice mode", async (t) =
       LAN_DISCOVERY_ENABLED: "0",
       LAN_VOICE_BIND: "127.0.0.1",
       LAN_VOICE_PORT: String(port),
-      MOCK_TRANSCRIPT: "添加计划 买牛奶",
+      MOCK_TRANSCRIPT: "hello mac",
       SEND_TARGET: "text_injector",
       DRY_RUN_TEXT_INJECTION: "1",
       TODO_INTENT_PROVIDER: "rules",
@@ -180,58 +180,33 @@ test("server routes transcripts using each client's own voice mode", async (t) =
     fs.rmSync(appDataRoot, { recursive: true, force: true });
   });
 
-  const url = `ws://127.0.0.1:${port}`;
-  const todoWs = await connectWebSocket(url);
-  const todoMessages = createMessageCollector(todoWs);
-  t.after(() => closeWebSocket(todoWs));
+  const ws = await connectWebSocket(`ws://127.0.0.1:${port}`);
+  const messages = createMessageCollector(ws);
+  t.after(() => closeWebSocket(ws));
 
-  todoWs.send(JSON.stringify({ type: "hello", deviceId: "todo-board" }));
-  await todoMessages.waitFor((message) => message.type === "hello_ack");
-  await todoMessages.waitFor((message) => message.type === "server_ready");
-  await todoMessages.waitFor((message) => message.type === "mode_state" && message.mode === "normal");
+  ws.send(JSON.stringify({ type: "hello", deviceId: "mac-client" }));
+  await messages.waitFor((message) => message.type === "hello_ack");
+  await messages.waitFor((message) => message.type === "server_ready");
 
-  todoWs.send(JSON.stringify({ type: "set_mode", mode: "todo" }));
-  await todoMessages.waitFor((message) => message.type === "mode_state" && message.mode === "todo");
+  ws.send(JSON.stringify({ type: "ptt_start", ts: Date.now() }));
+  ws.send(Buffer.from([0x00, 0x00]), { binary: true });
+  ws.send(JSON.stringify({ type: "ptt_stop", ts: Date.now() }));
 
-  const liveWs = await connectWebSocket(url);
-  const liveMessages = createMessageCollector(liveWs);
-  t.after(() => closeWebSocket(liveWs));
+  const typedStatus = await messages.waitFor(
+    (message) => message.type === "status" && message.status === "typed" && message.text === "hello mac",
+    6000
+  );
+  assert.equal(typedStatus.text, "hello mac");
 
-  liveWs.send(JSON.stringify({ type: "hello", deviceId: "live-console" }));
-  await liveMessages.waitFor((message) => message.type === "hello_ack");
-  await liveMessages.waitFor((message) => message.type === "server_ready");
-  await liveMessages.waitFor((message) => message.type === "mode_state" && message.mode === "normal");
-
-  liveWs.send(JSON.stringify({ type: "set_mode", mode: "normal" }));
-  await liveMessages.waitFor((message) => message.type === "mode_state" && message.mode === "normal");
+  ws.send(JSON.stringify({ type: "action_enter", ts: Date.now() }));
+  const enterStatus = await messages.waitFor(
+    (message) => message.type === "status" && message.status === "typed" && message.text === "",
+    6000
+  );
+  assert.equal(enterStatus.text, "");
 
   await sleep(200);
-  assert.equal(
-    todoMessages.take((message) => message.type === "mode_state" && message.mode === "normal"),
-    null,
-    `todo client should not be forced back to normal\n${serverOutput.join("")}`
-  );
-
-  const todoStatePromise = todoMessages.waitFor(
-    (message) =>
-      message.type === "todo_state" &&
-      Array.isArray(message.items) &&
-      message.items.some((item) => item.title === "买牛奶")
-  );
-  const todoResultPromise = todoMessages.waitFor(
-    (message) => message.type === "todo_result" && message.ok === true && /已添加计划/.test(message.message)
-  );
-
-  todoWs.send(JSON.stringify({ type: "ptt_start", ts: Date.now() }));
-  todoWs.send(Buffer.from([0x00, 0x00]), { binary: true });
-  todoWs.send(JSON.stringify({ type: "ptt_stop", ts: Date.now() }));
-
-  await todoStatePromise;
-  await todoResultPromise;
-
-  assert.equal(
-    todoMessages.take((message) => message.type === "status" && message.status === "typed"),
-    null,
-    `todo mode should not dispatch as live inject\n${serverOutput.join("")}`
-  );
+  const output = serverOutput.join("");
+  assert.match(output, /\[inject\] dry-run/);
+  assert.match(output, /forceEnter:\s*true/);
 });

@@ -84,7 +84,8 @@ test("TodoAssistant uses DeepSeek fallback for natural create phrasing", async (
   assert.equal(result.source, "deepseek");
 });
 
-test("TodoAssistant accepts DeepSeek clear commands", async (t) => {
+
+test("TodoAssistant maps relaxed LLM fields to command schema", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -95,8 +96,8 @@ test("TodoAssistant accepts DeepSeek clear commands", async (t) => {
       {
         message: {
           content: JSON.stringify({
-            type: "command",
-            action: "clear"
+            action: "add",
+            task: "明天上午给客户回电话"
           })
         }
       }
@@ -108,7 +109,43 @@ test("TodoAssistant accepts DeepSeek clear commands", async (t) => {
     todoIntentApiKey: "test-key"
   });
 
-  const result = await assistant.interpret("把所有待办都删掉");
-  assert.deepEqual(result.command, { action: "clear" });
-  assert.equal(result.source, "deepseek");
+  const result = await assistant.interpret("帮我记一下明天上午给客户回电话");
+  assert.deepEqual(result.command, {
+    action: "create",
+    text: "明天上午给客户回电话"
+  });
 });
+
+test("TodoAssistant maps relaxed toggle payload to toggle command", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            action: "complete",
+            item_index: "2"
+          })
+        }
+      }
+    ]
+  }));
+
+  const assistant = createTodoAssistant({
+    todoIntentProvider: "deepseek",
+    todoIntentApiKey: "test-key"
+  });
+
+  const result = await assistant.interpret("把第二个计划标记完成");
+  assert.deepEqual(result.command, {
+    action: "toggle",
+    index: 2,
+    text: "",
+    completed: true
+  });
+});
+

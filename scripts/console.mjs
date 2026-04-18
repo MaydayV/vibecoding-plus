@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Terminal console client for vibecoding-voice.
+ * Terminal console client for vibecoding-plus.
  * Connects to the local WebSocket server and shows real-time state + accepts typed prompts.
  *
  * Usage: node scripts/console.mjs
@@ -339,7 +339,7 @@ rl.on("close", () => {
 // ── Start ────────────────────────────────────────────────────────────────────
 export function startConsole(label = "") {
   const tag = label ? ` [${label}]` : "";
-  process.stdout.write(`vibecoding-voice console${tag} — ${WS_URL}\n`);
+  process.stdout.write(`vibecoding-plus console${tag} — ${WS_URL}\n`);
   process.stdout.write(`Type a prompt and press Enter to send. Ctrl+C to exit.\n\n`);
   process.stdout.write(`Slash commands: /mode normal | /mode todo | /todo list | /todo add <text>\n\n`);
   rl.prompt();

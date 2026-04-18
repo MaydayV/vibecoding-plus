@@ -6,17 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Host bridge for LAN voice coding with an ESP32 device and Codex CLI. Captures push-to-talk audio via WebSocket, transcribes it using STT providers (OpenAI Whisper or Volcengine), and either injects text into Windows input fields or sends it to a managed Codex CLI session.
 
-## Commands
+## Workflow Preferences (Current Project)
 
-- **Install**: `npm install`
-- **Start server**: `npm start` (runs `node src/server.mjs`)
-- **Diagnose environment**: `npm run doctor` (checks CLI tools, API keys, ports)
-- **Run all tests**: `npm test` (runs `node --test`)
-- **Run single test**: `node --test test/lan-auth.test.mjs`
-- **Mock client**: `node scripts/mock-client.mjs` (test WebSocket client)
-- **Setup**: Copy `.env.example` to `.env` and configure API keys
+- For firmware changes under `firmware/**`, automatically run build first (`idf.py build`).
+- After successful firmware build, automatically flash to connected board (`idf.py -p /dev/cu.usbmodem* flash`) when device is present.
+- After firmware flash, automatically run host-side regression tests (`npm test` or targeted `node --test ...`).
+- If tests fail, automatically attempt focused fixes and rerun relevant tests until passing or a hard blocker appears.
+- If flashing fails due to missing device/port, immediately report blocker and continue with build + tests.
 
-## Architecture
 
 ES module Node.js application (requires Node >= 20). Single dependency: `ws` for WebSocket.
 
@@ -61,6 +58,7 @@ server.mjs (entry point — HTTP + WebSocket server)
 **Required** (one STT provider):
 - `OPENAI_API_KEY` — for Whisper
 - `VOLCENGINE_APP_KEY` + `VOLCENGINE_ACCESS_KEY` — for Volcengine ASR
+- `WHISPER_CPP_MODEL_PATH` — for local whisper.cpp ASR
 
 **Key settings**:
 - `SEND_TARGET`: `text_injector` (default), `codex_exec`, or `claude_code`

@@ -228,7 +228,9 @@ CustomLcdDisplay::CustomLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_p
     }
 
     ESP_LOGI(TAG, "ui start");
+#if !CONFIG_ZECTRIX_LAN_MIC_MODE
     SetupUI();
+#endif
 }
 
 CustomLcdDisplay::~CustomLcdDisplay() {

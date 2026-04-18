@@ -2,6 +2,7 @@ import path from "node:path";
 
 const MAX_LOG_LINES = 8;
 const MAX_SUMMARY_CHARS = 240;
+const DISPLAY_REPO_NAME = "vibecoding-plus";
 
 function collapseWhitespace(value) {
   return String(value || "")
@@ -34,7 +35,7 @@ export function createCliView(config) {
     logLines: [],
     threadId: "",
     cwd,
-    repoName: path.basename(cwd),
+    repoName: DISPLAY_REPO_NAME,
     quota5hRemainingPct: null,
     quotaWeekRemainingPct: null,
     quotaPlanType: ""

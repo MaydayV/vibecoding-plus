@@ -139,7 +139,7 @@ When touching board bring-up, reconnect, or flashing behavior, re-test these exa
 
 ### npm package
 
-Package name: `@mac20777/vibecoding-voice`
+Package name: `@mac20777/vibecoding-plus`
 
 Recommended release flow:
 
@@ -173,7 +173,7 @@ Notes:
 After pushing the tag, create the GitHub release, for example:
 
 ```powershell
-gh release create v0.2.0 --repo macheng2017/vibecoding-voice --title "v0.2.0"
+gh release create v0.2.0 --repo macheng2017/vibecoding-plus --title "v0.2.0"
 ```
 
 ## Secrets And Local Data

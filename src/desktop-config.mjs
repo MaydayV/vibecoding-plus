@@ -2,7 +2,7 @@ import { detectConfiguredSttProvider, getConfigIssues } from "./config.mjs";
 import { normalizeDesktopSettings } from "./desktop-settings.mjs";
 
 const VALID_SEND_TARGETS = new Set(["text_injector", "codex_exec", "claude_code"]);
-const VALID_STT_PROVIDERS = new Set(["volcengine", "openai"]);
+const VALID_STT_PROVIDERS = new Set(["volcengine", "openai", "whisper_cpp", "qwen_asr"]);
 
 function normalizeChoice(value, fallback, validValues) {
   const normalized = String(value || "").trim();
@@ -22,6 +22,17 @@ export function buildDesktopFormState(config, desktopSettings = {}) {
     openaiModel: String(config.openaiModel || "whisper-1"),
     volcengineAppKey: String(config.volcengineAppKey || ""),
     volcengineAccessKey: String(config.volcengineAccessKey || ""),
+    whisperCppModelPath: String(config.whisperCppModelPath || ""),
+    whisperCppLanguage: String(config.whisperCppLanguage || "zh"),
+    whisperCppThreads: String(config.whisperCppThreads || "4"),
+    whisperCppCommand: String(config.whisperCppCommand || "whisper-cli"),
+    whisperCppExtraArgs: String(config.whisperCppExtraArgs || ""),
+    qwenAsrApiKey: String(config.qwenAsrApiKey || ""),
+    qwenAsrModel: String(config.qwenAsrModel || "Qwen/Qwen3-ASR-0.6B"),
+    qwenAsrLanguage: String(config.qwenAsrLanguage || "zh"),
+    qwenAsrPrompt: String(config.qwenAsrPrompt || ""),
+    qwenAsrRealtimeBaseUrl: String(config.qwenAsrRealtimeBaseUrl || "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"),
+    qwenAsrSampleRate: String(config.qwenAsrSampleRate || 16000),
     transcriptDeliveryMode:
       String(config.transcriptDeliveryMode || "").trim().toLowerCase() === "immediate"
         ? "immediate"
@@ -58,6 +69,17 @@ export function buildUserConfigUpdates(formState = {}) {
     OPENAI_TRANSCRIBE_MODEL: normalizeOptionalText(formState.openaiModel),
     VOLCENGINE_APP_KEY: normalizeOptionalText(formState.volcengineAppKey),
     VOLCENGINE_ACCESS_KEY: normalizeOptionalText(formState.volcengineAccessKey),
+    WHISPER_CPP_MODEL_PATH: normalizeOptionalText(formState.whisperCppModelPath),
+    WHISPER_CPP_LANGUAGE: normalizeOptionalText(formState.whisperCppLanguage),
+    WHISPER_CPP_THREADS: normalizeOptionalText(formState.whisperCppThreads),
+    WHISPER_CPP_COMMAND: normalizeOptionalText(formState.whisperCppCommand),
+    WHISPER_CPP_EXTRA_ARGS: normalizeOptionalText(formState.whisperCppExtraArgs),
+    QWEN_ASR_API_KEY: normalizeOptionalText(formState.qwenAsrApiKey),
+    QWEN_ASR_MODEL: normalizeOptionalText(formState.qwenAsrModel),
+    QWEN_ASR_LANGUAGE: normalizeOptionalText(formState.qwenAsrLanguage),
+    QWEN_ASR_PROMPT: normalizeOptionalText(formState.qwenAsrPrompt),
+    QWEN_ASR_REALTIME_BASE_URL: normalizeOptionalText(formState.qwenAsrRealtimeBaseUrl),
+    QWEN_ASR_SAMPLE_RATE: normalizeOptionalText(formState.qwenAsrSampleRate),
     TRANSCRIPT_DELIVERY_MODE:
       String(formState.transcriptDeliveryMode || "").trim().toLowerCase() === "immediate"
         ? "immediate"

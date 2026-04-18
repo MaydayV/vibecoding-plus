@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 
 import { createCliView, formatCodexEvent, pushLogLine, summarizeAssistantText } from "../src/cli-projector.mjs";
 
-test("createCliView derives repo name from cwd", () => {
-  const view = createCliView({ codexCwd: "D:/github/vibecoding-voice" });
-  assert.equal(view.repoName, "vibecoding-voice");
+test("createCliView uses vibecoding-plus as display repo name", () => {
+  const view = createCliView({ codexCwd: "/tmp/example-project" });
+  assert.equal(view.repoName, "vibecoding-plus");
   assert.equal(view.phase, "idle");
 });
 

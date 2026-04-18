@@ -99,6 +99,110 @@ function normalizeOptionalBoolean(value) {
   return undefined;
 }
 
+function normalizeActionAlias(value) {
+  const action = collapseWhitespace(value).toLowerCase();
+  if (!action) {
+    return "";
+  }
+  const aliasMap = new Map([
+    ["add", "create"],
+    ["insert", "create"],
+    ["new", "create"],
+    ["新增", "create"],
+    ["添加", "create"],
+    ["create", "create"],
+    ["list", "list"],
+    ["show", "list"],
+    ["查看", "list"],
+    ["query", "list"],
+    ["update", "update"],
+    ["edit", "update"],
+    ["modify", "update"],
+    ["修改", "update"],
+    ["delete", "delete"],
+    ["remove", "delete"],
+    ["删", "delete"],
+    ["clear", "clear"],
+    ["reset", "clear"],
+    ["清空", "clear"],
+    ["toggle", "toggle"],
+    ["check", "toggle"],
+    ["uncheck", "toggle"],
+    ["complete", "toggle"],
+    ["completed", "toggle"],
+    ["完成", "toggle"],
+    ["取消完成", "toggle"]
+  ]);
+  return aliasMap.get(action) || action;
+}
+
+function normalizeModelTextFields(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  return collapseWhitespace(
+    payload.text ||
+    payload.title ||
+    payload.task ||
+    payload.todo ||
+    payload.content ||
+    payload.value ||
+    ""
+  );
+}
+
+function normalizeModelIndexFields(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  return (
+    normalizeIndex(payload.index) ||
+    normalizeIndex(payload.id) ||
+    normalizeIndex(payload.item) ||
+    normalizeIndex(payload.item_index) ||
+    normalizeIndex(payload.itemIndex) ||
+    null
+  );
+}
+
+function inferCompletedFromPayload(payload) {
+  const completed = normalizeOptionalBoolean(payload?.completed ?? payload?.done ?? payload?.checked ?? payload?.is_done ?? payload?.isDone);
+  if (typeof completed === "boolean") {
+    return completed;
+  }
+  const actionText = collapseWhitespace(payload?.action || "").toLowerCase();
+  if (/uncheck|取消完成|取消勾选|未完成/u.test(actionText)) {
+    return false;
+  }
+  if (/check|complete|完成|勾选/u.test(actionText)) {
+    return true;
+  }
+  return undefined;
+}
+
+function normalizeLlmPayloadShape(payload) {
+  if (!payload || typeof payload !== "object") {
+    return payload;
+  }
+  const normalized = { ...payload };
+  const rawAction = collapseWhitespace(normalized.action);
+  normalized.type = collapseWhitespace(normalized.type).toLowerCase() || "command";
+  normalized.action = normalizeActionAlias(rawAction);
+  normalized.text = normalizeModelTextFields(normalized);
+  normalized.index = normalizeModelIndexFields(normalized);
+  normalized.completed = inferCompletedFromPayload({ ...normalized, action: rawAction });
+
+  if (normalized.type === "ask" && (!normalized.pending || typeof normalized.pending !== "object")) {
+    const pendingAction = TODO_ACTIONS.has(normalized.action) ? normalized.action : "create";
+    const missing = normalized.text ? "index" : "text";
+    normalized.pending = { action: pendingAction, missing, index: normalized.index, completed: normalized.completed };
+  }
+
+  return normalized;
+}
+
+
+
 function isCancelText(text) {
   return /^(?:取消|算了|不用了|停止|退出)$/iu.test(collapseWhitespace(text));
 }
@@ -272,17 +376,18 @@ function normalizeLlmCommand(payload) {
     return { ok: false, action: "parse", message: "没有识别出待办命令" };
   }
 
-  const type = collapseWhitespace(payload.type).toLowerCase();
+  const normalizedPayload = normalizeLlmPayloadShape(payload);
+  const type = collapseWhitespace(normalizedPayload.type).toLowerCase();
   if (type === "ask") {
-    const pendingIntent = normalizeLlmPending(payload.pending);
-    return askResult(collapseWhitespace(payload.question) || "请补充待办信息", pendingIntent);
+    const pendingIntent = normalizeLlmPending(normalizedPayload.pending);
+    return askResult(collapseWhitespace(normalizedPayload.question) || "请补充待办信息", pendingIntent);
   }
 
   if (type === "unsupported") {
     return {
       ok: false,
       action: "parse",
-      message: collapseWhitespace(payload.message) || "现在只支持待办增删改查",
+      message: collapseWhitespace(normalizedPayload.message) || "现在只支持待办增删改查",
       pendingIntent: null
     };
   }
@@ -291,7 +396,7 @@ function normalizeLlmCommand(payload) {
     return { ok: false, action: "parse", message: "没有识别出待办命令", pendingIntent: null };
   }
 
-  const action = collapseWhitespace(payload.action).toLowerCase();
+  const action = collapseWhitespace(normalizedPayload.action).toLowerCase();
   if (!TODO_ACTIONS.has(action)) {
     return { ok: false, action: "parse", message: "不支持这个待办操作", pendingIntent: null };
   }
@@ -300,9 +405,9 @@ function normalizeLlmCommand(payload) {
     return commandResult({ action }, "deepseek");
   }
 
-  const text = collapseWhitespace(payload.text);
-  const index = normalizeIndex(payload.index);
-  const completed = normalizeOptionalBoolean(payload.completed);
+  const text = collapseWhitespace(normalizedPayload.text);
+  const index = normalizeIndex(normalizedPayload.index);
+  const completed = normalizeOptionalBoolean(normalizedPayload.completed);
   if (action === "create") {
     return text
       ? commandResult({ action, text }, "deepseek")

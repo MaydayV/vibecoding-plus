@@ -103,7 +103,7 @@ export function loadConfigFiles({ quietMissing = false, desktopMode } = {}) {
 
   if (!quietMissing && loadedConfigFiles.length === 0) {
     console.warn(
-      `[vibecoding-voice] No config file found.\n` +
+      `[vibecoding-plus] No config file found.\n` +
         `                   Run "vibe config" to create ${getUserConfigPath()}.\n` +
         `                   You can also use environment variables or a local .env file.`
     );
@@ -217,6 +217,14 @@ export function detectConfiguredSttProvider(config) {
     return explicit;
   }
 
+  if (config.whisperCppModelPath) {
+    return "whisper_cpp";
+  }
+
+  if (config.qwenAsrModel) {
+    return "qwen_asr";
+  }
+
   if (config.openaiApiKey) {
     return "openai";
   }
@@ -228,6 +236,7 @@ export function detectConfiguredSttProvider(config) {
   return "";
 }
 
+
 export function getConfigIssues(config) {
   if (config.mockTranscript) {
     return [];
@@ -236,8 +245,22 @@ export function getConfigIssues(config) {
   const provider = detectConfiguredSttProvider(config);
   if (!provider) {
     return [
-      "No STT provider is configured. Set OPENAI_API_KEY or VOLCENGINE_APP_KEY + VOLCENGINE_ACCESS_KEY."
+      "No STT provider is configured. Set STT_PROVIDER or provider-specific settings (QWEN_ASR_MODEL + QWEN_ASR_API_KEY + QWEN_ASR_REALTIME_BASE_URL, OPENAI_API_KEY, VOLCENGINE_APP_KEY + VOLCENGINE_ACCESS_KEY, or WHISPER_CPP_MODEL_PATH)."
     ];
+  }
+
+  if (provider === "qwen_asr") {
+    const issues = [];
+    if (!String(config.qwenAsrModel || "").trim()) {
+      issues.push("QWEN_ASR_MODEL is not set.");
+    }
+    if (!String(config.qwenAsrApiKey || "").trim()) {
+      issues.push("QWEN_ASR_API_KEY is not set.");
+    }
+    if (!String(config.qwenAsrRealtimeBaseUrl || "").trim()) {
+      issues.push("QWEN_ASR_REALTIME_BASE_URL is not set.");
+    }
+    return issues;
   }
 
   if (provider === "openai") {
@@ -251,6 +274,14 @@ export function getConfigIssues(config) {
     }
     if (!config.volcengineAccessKey) {
       issues.push("VOLCENGINE_ACCESS_KEY is not set.");
+    }
+    return issues;
+  }
+
+  if (provider === "whisper_cpp") {
+    const issues = [];
+    if (!config.whisperCppModelPath) {
+      issues.push("WHISPER_CPP_MODEL_PATH is not set.");
     }
     return issues;
   }
@@ -340,9 +371,12 @@ export function loadConfig(options = {}) {
       String(process.env.LAN_DISCOVERY_HOST_ID || "").trim() ||
       process.env.COMPUTERNAME ||
       process.env.HOSTNAME ||
-      "vibecoding-host",
+      "vibecoding-plus-host",
     lanSharedSecret: String(process.env.LAN_SHARED_SECRET || "").trim(),
     lanAuthWindowSec: Number(process.env.LAN_AUTH_WINDOW_SEC || "300"),
+    lanTrustLocalhost: process.env.LAN_TRUST_LOCALHOST === "1",
+    lanAudioMaxBytes: Math.max(32768, Number(process.env.LAN_AUDIO_MAX_BYTES || `${2 * 1024 * 1024}`)),
+    lanAudioMaxMs: Math.max(1000, Number(process.env.LAN_AUDIO_MAX_MS || "120000")),
     sendTarget,
     sendTargetAuto,
     transcriptDeliveryMode: normalizeTranscriptDeliveryMode(
@@ -359,6 +393,11 @@ export function loadConfig(options = {}) {
     todoFollowupTimeoutMs: Number(process.env.TODO_FOLLOWUP_TIMEOUT_MS || "30000"),
     deepseekApiKey: process.env.DEEPSEEK_API_KEY || "",
     dryRunTextInjection: process.env.DRY_RUN_TEXT_INJECTION === "1",
+    terminalMirrorEnabled: process.env.TERMINAL_MIRROR_ENABLED === "1",
+    terminalMirrorSession: String(process.env.TERMINAL_MIRROR_SESSION || "").trim() || "vibehost",
+    terminalMirrorWindow: String(process.env.TERMINAL_MIRROR_WINDOW || "").trim() || "node",
+    terminalMirrorIntervalMs: Number(process.env.TERMINAL_MIRROR_INTERVAL_MS || "800"),
+    terminalMirrorLines: Number(process.env.TERMINAL_MIRROR_LINES || "60"),
     codexCommand,
     codexCwd: resolveCodexCwd(),
     codexSkipGitRepoCheck: process.env.CODEX_SKIP_GIT_REPO_CHECK === "1",
@@ -371,16 +410,29 @@ export function loadConfig(options = {}) {
     claudeDangerouslySkipPermissions: process.env.CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS === "1",
     cliTimeoutSec: Number(process.env.CLI_TIMEOUT_SEC || "300"),
     sttProvider: process.env.STT_PROVIDER || "",
+    openaiBaseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
     openaiApiKey: process.env.OPENAI_API_KEY || "",
     openaiModel: process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1",
     openaiLanguage: process.env.OPENAI_TRANSCRIBE_LANGUAGE || "",
+    whisperCppCommand: process.env.WHISPER_CPP_COMMAND || "whisper-cli",
+    whisperCppModelPath: process.env.WHISPER_CPP_MODEL_PATH || "",
+    whisperCppLanguage: process.env.WHISPER_CPP_LANGUAGE || "zh",
+    whisperCppThreads: Number(process.env.WHISPER_CPP_THREADS || "4"),
+    whisperCppExtraArgs: process.env.WHISPER_CPP_EXTRA_ARGS || "",
+    whisperCppTimeoutMs: Number(process.env.WHISPER_CPP_TIMEOUT_MS || "45000"),
     volcengineAppKey: process.env.VOLCENGINE_APP_KEY || "",
     volcengineAccessKey: process.env.VOLCENGINE_ACCESS_KEY || "",
     volcengineResourceId: process.env.VOLCENGINE_RESOURCE_ID || "volc.bigasr.auc_turbo",
     volcengineLanguage: process.env.VOLCENGINE_LANGUAGE || "zh-CN",
+    qwenAsrModel: process.env.QWEN_ASR_MODEL || "Qwen/Qwen3-ASR-0.6B",
+    qwenAsrLanguage: process.env.QWEN_ASR_LANGUAGE || "zh",
+    qwenAsrPrompt: process.env.QWEN_ASR_PROMPT || "",
+    qwenAsrTimeoutMs: Number(process.env.QWEN_ASR_TIMEOUT_MS || "45000"),
+    qwenAsrApiKey: process.env.QWEN_ASR_API_KEY || process.env.DASHSCOPE_API_KEY || "",
+    qwenAsrRealtimeBaseUrl: process.env.QWEN_ASR_REALTIME_BASE_URL || "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    qwenAsrSampleRate: Number(process.env.QWEN_ASR_SAMPLE_RATE || "16000"),
     mockTranscript: process.env.MOCK_TRANSCRIPT || "",
     saveDebugWav: process.env.SAVE_DEBUG_WAV === "1",
-    loadedConfigFiles,
     userConfigPath,
     cwdConfigPath,
     projectConfigPath

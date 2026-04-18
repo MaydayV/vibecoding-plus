@@ -6,15 +6,15 @@ const { pathToFileURL } = require("node:url");
 function getUserConfigDir() {
   if (process.platform === "win32") {
     const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-    return path.join(appData, "vibecoding-voice");
+    return path.join(appData, "vibecoding-plus");
   }
 
   if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "vibecoding-voice");
+    return path.join(os.homedir(), "Library", "Application Support", "vibecoding-plus");
   }
 
   const xdgConfigHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  return path.join(xdgConfigHome, "vibecoding-voice");
+  return path.join(xdgConfigHome, "vibecoding-plus");
 }
 
 const bootstrapLogPath = path.join(getUserConfigDir(), "desktop-bootstrap.log");

@@ -3,7 +3,7 @@ import os from "node:os";
 
 import { signDiscoveryReply } from "./lan-auth.mjs";
 
-const DISCOVERY_SERVICE = "vibecoding-voice";
+const DISCOVERY_SERVICE = "vibecoding-plus";
 
 function ipv4ToInt(address) {
   return address
@@ -75,6 +75,12 @@ export function startDiscoveryServer(config, { log = () => {} } = {}) {
 
     const expectedHostId = String(request.expectedHostId || "").trim();
     if (expectedHostId && expectedHostId !== config.discoveryHostId) {
+      log("discovery ignored host id mismatch", {
+        remote: remoteInfo.address,
+        deviceId: request.deviceId || "unknown",
+        expectedHostId,
+        actualHostId: config.discoveryHostId
+      });
       return;
     }
 

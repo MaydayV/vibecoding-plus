@@ -3,7 +3,10 @@ param(
     [string]$TextBase64,
 
     [ValidateSet("type_only", "type_and_enter")]
-    [string]$Mode = "type_only"
+    [string]$Mode = "type_only",
+
+    [ValidateSet("0", "1")]
+    [string]$ForceEnter = "0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +14,7 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 
 $text = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($TextBase64))
+$shouldPressEnter = ($Mode -eq "type_and_enter") -or ($ForceEnter -eq "1")
 
 $restoreClipboard = $false
 $previousClipboard = $null
@@ -22,12 +26,14 @@ try {
     $restoreClipboard = $false
 }
 
-Set-Clipboard -Value $text
-Start-Sleep -Milliseconds 60
-[System.Windows.Forms.SendKeys]::SendWait("^v")
+if (-not [string]::IsNullOrEmpty($text)) {
+    Set-Clipboard -Value $text
+    Start-Sleep -Milliseconds 60
+    [System.Windows.Forms.SendKeys]::SendWait("^v")
+}
 
-if ($Mode -eq "type_and_enter") {
-    Start-Sleep -Milliseconds 200
+if ($shouldPressEnter) {
+    Start-Sleep -Milliseconds 120
     [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
 }
 
@@ -39,4 +45,3 @@ if ($restoreClipboard) {
     } catch {
     }
 }
-

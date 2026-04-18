@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 // Written by scripts/claude-statusline.mjs via Claude Code statusline hook.
-const CACHE_FILE = path.join(os.tmpdir(), "vibecoding-claude-rate-limits.json");
+const CACHE_FILE = path.join(os.tmpdir(), "vibecoding-plus-claude-rate-limits.json");
 
 // Discard data older than 1 hour — likely stale after an idle period.
 const MAX_AGE_MS = 60 * 60 * 1000;

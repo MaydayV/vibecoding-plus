@@ -12,7 +12,7 @@ import { getConfigIssues, loadConfig, writeUserConfigValues } from "../src/confi
 import { getDesktopSettingsPath, loadDesktopSettings, writeDesktopSettings } from "../src/desktop-settings.mjs";
 import { getUserConfigDir } from "../src/paths.mjs";
 
-const APP_ID = "com.mac20777.vibecodingvoice";
+const APP_ID = "com.mac20777.vibecodingplus";
 const HIDDEN_LAUNCH_ARG = "--hidden";
 const PROCESS_LOG_LIMIT = 200;
 const READY_TIMEOUT_MS = 8_000;
@@ -673,7 +673,7 @@ function refreshTrayMenu() {
   ]);
 
   tray.setContextMenu(menu);
-  tray.setToolTip(`VibeCoding Voice · ${serviceStatusLabel(serviceState.status)} · ${modeLabel(serviceState.mode)}`);
+  tray.setToolTip(`VibeCoding Plus · ${serviceStatusLabel(serviceState.status)} · ${modeLabel(serviceState.mode)}`);
 }
 
 async function buildBootstrap() {
@@ -699,7 +699,7 @@ function createMainWindow() {
     minWidth: 940,
     minHeight: 700,
     show: !hiddenLaunch,
-    title: "VibeCoding Voice",
+    title: "VibeCoding Plus",
     backgroundColor: "#08121d",
     icon: createWindowIcon(),
     webPreferences: {

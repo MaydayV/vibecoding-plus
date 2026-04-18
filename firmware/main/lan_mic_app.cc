@@ -50,7 +50,7 @@ namespace {
 #endif
 
 constexpr char kTag[] = "LanMicApp";
-constexpr char kDiscoveryService[] = "vibecoding-voice";
+constexpr char kDiscoveryService[] = "vibecoding-plus";
 constexpr char kLanMicNamespace[] = "lan_mic";
 constexpr char kVolumeKey[] = "volume";
 constexpr char kLastServerUriKey[] = "last_srv_uri";
@@ -232,9 +232,9 @@ bool LanMicApp::Initialize() {
     codec_->EnableOutput(false);
     codec_->SetOutputVolume(volume_);
 
-    status_text_ = "Starting Wi-Fi";
-    cli_status_text_ = "CLI idle";
-    cli_phase_text_ = "idle";
+    status_text_ = "启动 Wi‑Fi";
+    cli_status_text_ = "CLI 空闲";
+    cli_phase_text_ = "空闲";
     transcript_text_.clear();
     latest_assistant_text_.clear();
     repo_name_ = "AI";
@@ -251,7 +251,7 @@ bool LanMicApp::Initialize() {
     cli_log_lines_.clear();
     active_page_ = Page::Todo;
     voice_mode_ = VoiceMode::Todo;
-    hint_text_ = "Hold UP menu\nHold BOOT for Todo";
+    hint_text_ = "长按UP打开菜单\n长按BOOT待办语音";
     phase_ = Phase::Idle;
     network_state_ = NetworkState::Offline;
     RefreshBatteryStatus(true);
@@ -267,7 +267,7 @@ bool LanMicApp::Initialize() {
             case NetworkEvent::Connecting:
                 ESP_LOGI(kTag, "WiFi connecting: %s", data.c_str());
                 network_state_ = NetworkState::Offline;
-                status_text_ = "Wi-Fi connecting";
+                status_text_ = "Wi‑Fi 连接中";
                 hint_text_ = data.empty() ? "" : data;
                 UpdateDisplay();
                 break;
@@ -275,22 +275,22 @@ bool LanMicApp::Initialize() {
                 ESP_LOGI(kTag, "WiFi connected: %s", data.c_str());
                 xEventGroupSetBits(wifi_event_group_, kWifiConnectedBit);
                 network_state_ = NetworkState::Wifi;
-                status_text_ = "Wi-Fi connected";
+                status_text_ = "Wi‑Fi 已连接";
                 server_uri_.clear();
-                hint_text_ = CONFIG_LAN_DISCOVERY_ENABLED ? GetDiscoveryHintText() : "Connecting server...";
+                hint_text_ = CONFIG_LAN_DISCOVERY_ENABLED ? GetDiscoveryHintText() : "连接服务器中...";
                 UpdateDisplay();
                 break;
             case NetworkEvent::Disconnected:
                 ESP_LOGW(kTag, "WiFi disconnected");
                 xEventGroupClearBits(wifi_event_group_, kWifiConnectedBit);
                 network_state_ = NetworkState::Offline;
-                status_text_ = "Wi-Fi disconnected";
-                hint_text_ = "Check Wi-Fi\nHold UP+DOWN for setup";
+                status_text_ = "Wi‑Fi 已断开";
+                hint_text_ = "检查 Wi‑Fi\n长按上下键进入配网";
                 server_uri_.clear();
                 DisconnectWebSocket();
                 if (active_page_ == Page::Todo) {
                     offline_todo_mode_ = true;
-                    todo_last_action_text_ = "Offline Todo";
+                    todo_last_action_text_ = "离线待办";
                 } else {
                     active_page_ = Page::Summary;
                 }
@@ -299,7 +299,7 @@ bool LanMicApp::Initialize() {
             case NetworkEvent::WifiConfigModeEnter:
                 ESP_LOGW(kTag, "WiFi config mode: %s", data.c_str());
                 network_state_ = NetworkState::Config;
-                status_text_ = "Wi-Fi setup mode";
+                status_text_ = "Wi‑Fi 配网模式";
                 hint_text_ = data;
                 active_page_ = Page::Summary;
                 summary_scroll_offset_ = 0;
@@ -308,7 +308,7 @@ bool LanMicApp::Initialize() {
             case NetworkEvent::WifiConfigModeExit:
                 ESP_LOGI(kTag, "WiFi config mode exited");
                 network_state_ = NetworkState::Offline;
-                RequestWifiReconfigureByReboot("Restarting...", "Applying Wi-Fi setup");
+                RequestWifiReconfigureByReboot("重启中...", "正在应用 Wi‑Fi 配置");
                 break;
             default:
                 break;
@@ -386,6 +386,17 @@ void LanMicApp::ClearPersistedHost() {
     ESP_LOGI(kTag, "Cleared cached host pairing and server URI");
 }
 
+void LanMicApp::ClearCachedServerUri() {
+    if (cached_server_uri_.empty()) {
+        return;
+    }
+
+    Settings nvs(kLanMicNamespace, true);
+    nvs.EraseKey(kLastServerUriKey);
+    ESP_LOGW(kTag, "Cleared stale cached server URI: %s", cached_server_uri_.c_str());
+    cached_server_uri_.clear();
+}
+
 void LanMicApp::RequestWifiReconfigureByReboot(const char* status_text, const char* hint_text) {
     bool expected = false;
     if (!wifi_reconfigure_restart_pending_.compare_exchange_strong(expected,
@@ -400,8 +411,8 @@ void LanMicApp::RequestWifiReconfigureByReboot(const char* status_text, const ch
     ws_disconnected_pending_.store(false, std::memory_order_release);
     hello_sent_ = false;
 
-    status_text_ = status_text != nullptr ? status_text : "Restarting...";
-    hint_text_ = hint_text != nullptr ? hint_text : "Reconfiguring Wi-Fi";
+    status_text_ = status_text != nullptr ? status_text : "重启中...";
+    hint_text_ = hint_text != nullptr ? hint_text : "正在重新配置 Wi‑Fi";
     active_page_ = Page::Summary;
     summary_scroll_offset_ = 0;
     UpdateDisplay();
@@ -502,8 +513,8 @@ void LanMicApp::StartConnectAttemptAsync() {
         connect_attempt_started_ms_.store(0, std::memory_order_release);
         connect_attempt_running_.store(false, std::memory_order_release);
         connect_attempt_completed_.store(true, std::memory_order_release);
-        status_text_ = "Reconnect error";
-        hint_text_ = "Task create failed";
+        status_text_ = "重连失败";
+        hint_text_ = "创建任务失败";
         UpdateDisplay();
     }
 }
@@ -557,7 +568,7 @@ bool LanMicApp::EnsureWebSocketConnected() {
     }
 
     if (target_uri == nullptr) {
-        status_text_ = "Finding host";
+        status_text_ = "正在查找主机";
         hint_text_ = GetDiscoveryHintText();
         UpdateDisplay();
         return false;
@@ -578,8 +589,8 @@ bool LanMicApp::EnsureWebSocketConnected() {
         board_.SetPowerSaveLevel(PowerSaveLevel::BALANCED);
         SaveCachedServerUri(target_uri_text);
         network_state_ = NetworkState::Server;
-        status_text_ = "Connected";
-        hint_text_ = "";  // BuildPromptBody() will show "Hold BOOT to talk"
+        status_text_ = "已连接";
+        hint_text_ = "";  // BuildPromptBody() will show default hold-to-talk hint
         phase_ = Phase::Idle;
         ShowIdleTodoPage();
         UpdateDisplay();
@@ -594,8 +605,8 @@ bool LanMicApp::EnsureWebSocketConnected() {
     ws_->OnError([this](int error) {
         ESP_LOGW(kTag, "WebSocket error=%d", error);
         network_state_ = IsWifiConnected() ? NetworkState::Wifi : NetworkState::Offline;
-        status_text_ = "Server error";
-        hint_text_ = "Will retry automatically";
+        status_text_ = "服务器错误";
+        hint_text_ = "将自动重试";
         phase_ = Phase::Error;
         active_page_ = Page::Summary;
         UpdateDisplay();
@@ -614,9 +625,10 @@ bool LanMicApp::EnsureWebSocketConnected() {
             ESP_LOGW(kTag, "Discovered URI failed, forcing discovery next round");
             server_uri_.clear();
         } else if (std::strcmp(target_source, "cache") == 0) {
-            ESP_LOGW(kTag, "Cache connect failed; will retry discovery before reusing cache");
+            ESP_LOGW(kTag, "Cache connect failed; clearing stale cache and forcing discovery");
+            ClearCachedServerUri();
         }
-        status_text_ = "Connect failed";
+        status_text_ = "连接失败";
         hint_text_ = target_uri;
         UpdateDisplay();
         return false;
@@ -634,151 +646,180 @@ bool LanMicApp::DiscoverServerUri() {
         return false;
     }
 
-    // Skip re-discovery if we already have a URI from a previous successful discovery.
     if (!server_uri_.empty()) {
         return true;
     }
 
-    const std::string expected_host_id = GetExpectedDiscoveryHostId();
-    cJSON* request = cJSON_CreateObject();
-    const std::string nonce = MakeAuthNonce();
-    cJSON_AddStringToObject(request, "type", "discover_host");
-    cJSON_AddStringToObject(request, "service", kDiscoveryService);
-    cJSON_AddStringToObject(request, "deviceId", board_.GetUuid().c_str());
-    cJSON_AddStringToObject(request, "boardType", board_.GetBoardType().c_str());
-    cJSON_AddStringToObject(request, "nonce", nonce.c_str());
-    if (!expected_host_id.empty()) {
-        cJSON_AddStringToObject(request, "expectedHostId", expected_host_id.c_str());
-    }
-
-    char* request_text = cJSON_PrintUnformatted(request);
-    cJSON_Delete(request);
-    if (request_text == nullptr) {
-        return false;
-    }
-
-    for (int attempt = 0; attempt < kDiscoveryAttempts; ++attempt) {
-        int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-        if (sock < 0) {
-            ESP_LOGW(kTag, "Discovery socket create failed: errno=%d", errno);
-            break;
+    auto discover_with_host_filter = [this](const std::string& requested_host_id) -> bool {
+        cJSON* request = cJSON_CreateObject();
+        const std::string nonce = MakeAuthNonce();
+        cJSON_AddStringToObject(request, "type", "discover_host");
+        cJSON_AddStringToObject(request, "service", kDiscoveryService);
+        cJSON_AddStringToObject(request, "deviceId", board_.GetUuid().c_str());
+        cJSON_AddStringToObject(request, "boardType", board_.GetBoardType().c_str());
+        cJSON_AddStringToObject(request, "nonce", nonce.c_str());
+        if (!requested_host_id.empty()) {
+            cJSON_AddStringToObject(request, "expectedHostId", requested_host_id.c_str());
         }
 
-        int broadcast = 1;
-        setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
-        struct sockaddr_in local_addr = {};
-        local_addr.sin_family = AF_INET;
-        local_addr.sin_port = htons(0);
-        local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        if (bind(sock,
-                 reinterpret_cast<struct sockaddr*>(&local_addr),
-                 sizeof(local_addr)) < 0) {
-            ESP_LOGW(kTag, "Discovery bind failed: errno=%d", errno);
-            close(sock);
-            continue;
+        char* request_text = cJSON_PrintUnformatted(request);
+        cJSON_Delete(request);
+        if (request_text == nullptr) {
+            return false;
         }
 
-        struct sockaddr_in broadcast_addr = {};
-        broadcast_addr.sin_family = AF_INET;
-        broadcast_addr.sin_port = htons(CONFIG_LAN_DISCOVERY_PORT);
-        broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
-
-        ESP_LOGI(kTag, "Discovery attempt %d/%d", attempt + 1, kDiscoveryAttempts);
-        const int sent = sendto(sock,
-                                request_text,
-                                std::strlen(request_text),
-                                0,
-                                reinterpret_cast<struct sockaddr*>(&broadcast_addr),
-                                sizeof(broadcast_addr));
-        if (sent < 0) {
-            ESP_LOGW(kTag, "Discovery broadcast failed: errno=%d", errno);
-            close(sock);
-            continue;
-        }
-
-        const int64_t deadline_us = esp_timer_get_time() + (kDiscoveryTimeoutMs * 1000LL);
-        while (esp_timer_get_time() < deadline_us) {
-            const int64_t remaining_us = deadline_us - esp_timer_get_time();
-            if (remaining_us <= 0) {
+        for (int attempt = 0; attempt < kDiscoveryAttempts; ++attempt) {
+            int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            if (sock < 0) {
+                ESP_LOGW(kTag, "Discovery socket create failed: errno=%d", errno);
                 break;
             }
 
-            struct timeval timeout = {};
-            timeout.tv_sec = remaining_us / 1000000;
-            timeout.tv_usec = remaining_us % 1000000;
-            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-
-            char response_buffer[512];
-            struct sockaddr_in source_addr = {};
-            socklen_t source_addr_len = sizeof(source_addr);
-            const int received = recvfrom(sock,
-                                          response_buffer,
-                                          sizeof(response_buffer) - 1,
-                                          0,
-                                          reinterpret_cast<struct sockaddr*>(&source_addr),
-                                          &source_addr_len);
-            if (received <= 0) {
-                continue;
-            }
-
-            response_buffer[received] = '\0';
-            cJSON* response = cJSON_Parse(response_buffer);
-            if (response == nullptr) {
-                continue;
-            }
-
-            const char* type = GetJsonString(response, "type");
-            const char* service = GetJsonString(response, "service");
-            const char* ws_url = GetJsonString(response, "wsUrl");
-            const char* host_id = GetJsonString(response, "hostId");
-            const char* host_name = GetJsonString(response, "hostName");
-            const char* reply_nonce = GetJsonString(response, "nonce");
-            const char* auth_sig = GetJsonString(response, "authSig");
-
-            const bool type_ok = type != nullptr && strcmp(type, "discover_reply") == 0;
-            const bool service_ok = service == nullptr || strcmp(service, kDiscoveryService) == 0;
-            const bool host_ok = expected_host_id.empty() ||
-                                 (host_id != nullptr && expected_host_id == host_id);
-            bool auth_ok = true;
-            if (std::strlen(CONFIG_LAN_SHARED_SECRET) > 0) {
-                if (reply_nonce == nullptr || auth_sig == nullptr || nonce != reply_nonce) {
-                    auth_ok = false;
-                } else {
-                    const auto expected = HmacSha256Hex({
-                        "discover_reply",
-                        host_id != nullptr ? host_id : "",
-                        host_name != nullptr ? host_name : "",
-                        ws_url != nullptr ? ws_url : "",
-                        reply_nonce
-                    });
-                    auth_ok = !expected.empty() && expected == std::string(auth_sig);
-                }
-            }
-
-            if (type_ok && service_ok && host_ok && auth_ok && ws_url != nullptr && ws_url[0] != '\0') {
-                server_uri_ = ws_url;
-                SaveCachedServerUri(server_uri_);
-                SavePairedHost(host_id != nullptr ? host_id : "",
-                               host_name != nullptr ? host_name : "");
-                status_text_ = "Host discovered";
-                hint_text_ = (host_name != nullptr && host_name[0] != '\0') ? host_name : server_uri_;
-                ESP_LOGI(kTag, "Discovered host: %s (%s)", server_uri_.c_str(), hint_text_.c_str());
-                cJSON_Delete(response);
+            int broadcast = 1;
+            setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+            struct sockaddr_in local_addr = {};
+            local_addr.sin_family = AF_INET;
+            local_addr.sin_port = htons(0);
+            local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+            if (bind(sock,
+                     reinterpret_cast<struct sockaddr*>(&local_addr),
+                     sizeof(local_addr)) < 0) {
+                ESP_LOGW(kTag, "Discovery bind failed: errno=%d", errno);
                 close(sock);
-                cJSON_free(request_text);
-                return true;
+                continue;
             }
 
-            cJSON_Delete(response);
+            struct sockaddr_in broadcast_addr = {};
+            broadcast_addr.sin_family = AF_INET;
+            broadcast_addr.sin_port = htons(CONFIG_LAN_DISCOVERY_PORT);
+            broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
+
+            ESP_LOGI(kTag,
+                     "Discovery attempt %d/%d%s",
+                     attempt + 1,
+                     kDiscoveryAttempts,
+                     requested_host_id.empty() ? "" : " (paired host filter)");
+            const int sent = sendto(sock,
+                                    request_text,
+                                    std::strlen(request_text),
+                                    0,
+                                    reinterpret_cast<struct sockaddr*>(&broadcast_addr),
+                                    sizeof(broadcast_addr));
+            if (sent < 0) {
+                ESP_LOGW(kTag, "Discovery broadcast failed: errno=%d", errno);
+                close(sock);
+                continue;
+            }
+
+            const int64_t deadline_us = esp_timer_get_time() + (kDiscoveryTimeoutMs * 1000LL);
+            while (esp_timer_get_time() < deadline_us) {
+                const int64_t remaining_us = deadline_us - esp_timer_get_time();
+                if (remaining_us <= 0) {
+                    break;
+                }
+
+                struct timeval timeout = {};
+                timeout.tv_sec = remaining_us / 1000000;
+                timeout.tv_usec = remaining_us % 1000000;
+                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+                char response_buffer[512];
+                struct sockaddr_in source_addr = {};
+                socklen_t source_addr_len = sizeof(source_addr);
+                const int received = recvfrom(sock,
+                                              response_buffer,
+                                              sizeof(response_buffer) - 1,
+                                              0,
+                                              reinterpret_cast<struct sockaddr*>(&source_addr),
+                                              &source_addr_len);
+                if (received <= 0) {
+                    continue;
+                }
+
+                response_buffer[received] = '\0';
+                cJSON* response = cJSON_Parse(response_buffer);
+                if (response == nullptr) {
+                    continue;
+                }
+
+                const char* type = GetJsonString(response, "type");
+                const char* service = GetJsonString(response, "service");
+                const char* ws_url = GetJsonString(response, "wsUrl");
+                const char* host_id = GetJsonString(response, "hostId");
+                const char* host_name = GetJsonString(response, "hostName");
+                const char* reply_nonce = GetJsonString(response, "nonce");
+                const char* auth_sig = GetJsonString(response, "authSig");
+
+                const bool type_ok = type != nullptr && strcmp(type, "discover_reply") == 0;
+                const bool service_ok = service == nullptr || strcmp(service, kDiscoveryService) == 0;
+                const bool host_ok = requested_host_id.empty() ||
+                                     (host_id != nullptr && requested_host_id == host_id);
+                bool auth_ok = true;
+                if (std::strlen(CONFIG_LAN_SHARED_SECRET) > 0) {
+                    if (reply_nonce == nullptr || auth_sig == nullptr || nonce != reply_nonce) {
+                        auth_ok = false;
+                    } else {
+                        const auto expected = HmacSha256Hex({
+                            "discover_reply",
+                            host_id != nullptr ? host_id : "",
+                            host_name != nullptr ? host_name : "",
+                            ws_url != nullptr ? ws_url : "",
+                            reply_nonce
+                        });
+                        auth_ok = !expected.empty() && expected == std::string(auth_sig);
+                    }
+                }
+
+                if (type_ok && service_ok && host_ok && auth_ok && ws_url != nullptr && ws_url[0] != '\0') {
+                    server_uri_ = ws_url;
+                    SaveCachedServerUri(server_uri_);
+                    SavePairedHost(host_id != nullptr ? host_id : "",
+                                   host_name != nullptr ? host_name : "");
+                    status_text_ = "发现主机";
+                    hint_text_ = (host_name != nullptr && host_name[0] != '\0') ? host_name : server_uri_;
+                    ESP_LOGI(kTag, "Discovered host: %s (%s)", server_uri_.c_str(), hint_text_.c_str());
+                    cJSON_Delete(response);
+                    close(sock);
+                    cJSON_free(request_text);
+                    return true;
+                }
+
+                if (type_ok && service_ok && ws_url != nullptr && ws_url[0] != '\0' && !host_ok) {
+                    ESP_LOGW(kTag,
+                             "Discovery reply ignored by host filter: expected=%s got=%s",
+                             requested_host_id.c_str(),
+                             host_id != nullptr ? host_id : "(none)");
+                } else if (type_ok && service_ok && host_ok && !auth_ok) {
+                    ESP_LOGW(kTag, "Discovery reply auth failed for host=%s", host_id != nullptr ? host_id : "(none)");
+                }
+
+                cJSON_Delete(response);
+            }
+
+            close(sock);
+            if (attempt + 1 < kDiscoveryAttempts) {
+                vTaskDelay(pdMS_TO_TICKS(kDiscoveryRetryDelayMs));
+            }
         }
 
-        close(sock);
-        if (attempt + 1 < kDiscoveryAttempts) {
-            vTaskDelay(pdMS_TO_TICKS(kDiscoveryRetryDelayMs));
+        cJSON_free(request_text);
+        return false;
+    };
+
+    const std::string expected_host_id = GetExpectedDiscoveryHostId();
+    if (discover_with_host_filter(expected_host_id)) {
+        return true;
+    }
+
+    if (!expected_host_id.empty()) {
+        ESP_LOGW(kTag,
+                 "Discovery with paired host id failed (%s), retrying without host filter",
+                 expected_host_id.c_str());
+        if (discover_with_host_filter("")) {
+            return true;
         }
     }
 
-    cJSON_free(request_text);
     return false;
 #endif
 }
@@ -849,12 +890,12 @@ std::string LanMicApp::GetFallbackServerUri() const {
 
 std::string LanMicApp::GetDiscoveryHintText() const {
     if (!paired_host_name_.empty()) {
-        return "Finding " + paired_host_name_ + "...";
+        return "正在查找 " + paired_host_name_ + "...";
     }
     if (!paired_host_id_.empty()) {
-        return "Finding paired host...";
+        return "正在查找已配对主机...";
     }
-    return "Discovering host...";
+    return "正在发现主机...";
 }
 
 void LanMicApp::EnterWifiSetupMode() {
@@ -869,12 +910,12 @@ void LanMicApp::EnterWifiSetupMode() {
     network_state_ = NetworkState::Config;
     active_page_ = Page::Summary;
     summary_scroll_offset_ = 0;
-    status_text_ = "Wi-Fi setup";
-    hint_text_ = "Starting config AP...";
+    status_text_ = "Wi‑Fi 配网";
+    hint_text_ = "正在启动配网热点...";
     UpdateDisplay();
 
     SsidManager::GetInstance().Clear();
-    RequestWifiReconfigureByReboot("Restarting...", "Rebooting into Wi-Fi setup");
+    RequestWifiReconfigureByReboot("重启中...", "重启进入 Wi‑Fi 配网");
 }
 
 void LanMicApp::DisconnectWebSocket() {
@@ -961,6 +1002,15 @@ bool LanMicApp::SendPttStop() {
     return SendJson(message);
 }
 
+bool LanMicApp::SendEnter() {
+    char message[128];
+    snprintf(message,
+             sizeof(message),
+             "{\"type\":\"action_enter\",\"ts\":%lld}",
+             static_cast<long long>(esp_timer_get_time() / 1000));
+    return SendJson(message);
+}
+
 bool LanMicApp::SendAction(const char* action_type) {
     char message[128];
     snprintf(message,
@@ -1016,6 +1066,23 @@ bool LanMicApp::SendTodoCommand(const char* action, int index, int completed, co
                  id_part);
     }
     return SendJson(message);
+}
+
+bool LanMicApp::SendPlanSelect(int direction) {
+    if (direction == 0) {
+        return false;
+    }
+    const char* move = direction < 0 ? "prev" : "next";
+    char message[128];
+    snprintf(message,
+             sizeof(message),
+             "{\"type\":\"plan_select\",\"direction\":\"%s\"}",
+             move);
+    return SendJson(message);
+}
+
+bool LanMicApp::SendPlanApply() {
+    return SendJson("{\"type\":\"plan_apply\"}");
 }
 
 LanMicApp::VoiceMode LanMicApp::DesiredVoiceModeForPage(Page page) const {
@@ -1117,7 +1184,7 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
     }
 
     if (strcmp(type, "hello_ack") == 0) {
-        status_text_ = "Ready";
+        status_text_ = "就绪";
         offline_todo_mode_ = false;
         reconnect_stuck_prompt_ = false;
         todo_menu_open_ = false;
@@ -1128,7 +1195,7 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
         PlayBeep(600, 80);
         PlayBeep(900, 100);
     } else if (strcmp(type, "server_ready") == 0) {
-        status_text_ = "Ready";
+        status_text_ = "就绪";
         offline_todo_mode_ = false;
         reconnect_stuck_prompt_ = false;
         todo_menu_open_ = false;
@@ -1138,7 +1205,7 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
         const char* send_target = GetJsonString(root, "sendTarget");
         if (send_target != nullptr) {
             send_target_ = send_target;
-            cli_status_text_ = std::string(GetToolLabel()) + " idle";
+            cli_status_text_ = std::string(GetToolLabel()) + " 空闲";
             if (repo_name_ == "AI") {
                 repo_name_ = GetToolLabel();
             }
@@ -1204,64 +1271,92 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
         const char* message = GetJsonString(root, "message");
         const bool ok = GetJsonBool(root, "ok", false);
         phase_ = Phase::Idle;
-        status_text_ = ok ? "Todo" : "Todo err";
+        status_text_ = ok ? "待办" : "待办错误";
         hint_text_ = message != nullptr ? message : "";
         if (message != nullptr) {
             todo_last_action_text_ = message;
         }
         active_page_ = Page::Todo;
+    } else if (strcmp(type, "plan_options") == 0) {
+        cJSON* options = cJSON_GetObjectItemCaseSensitive(root, "options");
+        cJSON* selected_index = cJSON_GetObjectItemCaseSensitive(root, "selectedIndex");
+        plan_options_.clear();
+        if (cJSON_IsArray(options)) {
+            cJSON* item = nullptr;
+            cJSON_ArrayForEach(item, options) {
+                if (cJSON_IsString(item) && item->valuestring != nullptr) {
+                    plan_options_.push_back(item->valuestring);
+                }
+            }
+        }
+
+        if (plan_options_.empty()) {
+            plan_selected_index_ = -1;
+        } else if (cJSON_IsNumber(selected_index)) {
+            plan_selected_index_ = std::clamp(selected_index->valueint, 0, static_cast<int>(plan_options_.size()) - 1);
+        } else {
+            plan_selected_index_ = std::clamp(plan_selected_index_, 0, static_cast<int>(plan_options_.size()) - 1);
+        }
+
+        if (!plan_options_.empty()) {
+            active_page_ = Page::Summary;
+            phase_ = Phase::Idle;
+            status_text_ = "方案已就绪";
+            hint_text_ = "上下键选择 BOOT 应用";
+            summary_scroll_offset_ = std::max(0, plan_selected_index_ - 1);
+        }
     } else if (strcmp(type, "status") == 0) {
         const char* status = GetJsonString(root, "status");
         const char* text_value = GetJsonString(root, "text");
         if (status != nullptr) {
             if (strcmp(status, "recording") == 0) {
                 phase_ = Phase::Recording;
-                status_text_ = "Recording";
+                status_text_ = "录音中";
                 active_page_ = PageForCurrentVoiceMode();
             } else if (strcmp(status, "transcribing") == 0) {
                 phase_ = Phase::Transcribing;
-                status_text_ = "Transcribing";
+                status_text_ = "转写中";
                 active_page_ = PageForCurrentVoiceMode();
                 PlayBeep(660, 80);   // 停止录音/转录中：短低音
             } else if (strcmp(status, "awaiting_action") == 0) {
                 phase_ = Phase::AwaitingAction;
-                status_text_ = "Ready to send";
+                status_text_ = "待发送";
                 has_pending_transcript_ = true;
                 active_page_ = Page::Summary;
                 summary_scroll_offset_ = 0;
             } else if (strcmp(status, "typed") == 0) {
                 const bool text_injector = send_target_ == "text_injector";
                 phase_ = text_injector ? Phase::Idle : Phase::Running;
-                status_text_ = text_injector ? "Injected" : "Sent";
+                status_text_ = text_injector ? "已注入" : "已发送";
                 has_pending_transcript_ = false;
                 active_page_ = Page::Summary;
             } else if (strcmp(status, "undo_ok") == 0) {
                 phase_ = Phase::Idle;
-                status_text_ = "Canceled";
+                status_text_ = "已取消";
                 has_pending_transcript_ = false;
                 ShowIdleTodoPage();
             } else if (strcmp(status, "transcript_empty") == 0 || strcmp(status, "empty_segment") == 0) {
                 if (text_value != nullptr && text_value[0] != '\0') {
                     phase_ = Phase::AwaitingAction;
-                    status_text_ = "No speech added";
+                    status_text_ = "未追加语音";
                     has_pending_transcript_ = true;
                     transcript_text_ = text_value;
                     active_page_ = Page::Summary;
                 } else {
                     phase_ = Phase::Idle;
-                    status_text_ = "No speech detected";
-                    hint_text_ = "Try again";
+                    status_text_ = "未检测到语音";
+                    hint_text_ = "请重试";
                     has_pending_transcript_ = false;
                     transcript_text_.clear();
                     ShowIdleTodoPage();
                 }
             } else if (strcmp(status, "no_pending") == 0) {
                 phase_ = Phase::Idle;
-                status_text_ = "Nothing pending";
+                status_text_ = "无待处理内容";
                 ShowIdleTodoPage();
             } else if (strcmp(status, "cli_busy") == 0) {
                 phase_ = Phase::Running;
-                status_text_ = std::string(GetToolLabel()) + " busy";
+                status_text_ = std::string(GetToolLabel()) + " 忙碌";
                 active_page_ = Page::Summary;
             } else {
                 status_text_ = status;
@@ -1278,9 +1373,9 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
         has_pending_transcript_ = GetJsonBool(root, "requiresAction", false);
         phase_ = has_pending_transcript_ ? Phase::AwaitingAction : Phase::Idle;
         if (has_pending_transcript_) {
-            status_text_ = "Ready to send";
+            status_text_ = "待发送";
         } else {
-            status_text_ = voice_mode_ == VoiceMode::Todo ? "Todo input" : "Transcript ready";
+            status_text_ = voice_mode_ == VoiceMode::Todo ? "待办输入" : "转写已就绪";
         }
         active_page_ = PageForCurrentVoiceMode();
         summary_scroll_offset_ = 0;
@@ -1288,7 +1383,7 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
         transcript_text_.clear();
         has_pending_transcript_ = false;
         phase_ = Phase::Idle;
-        status_text_ = "Cleared";
+        status_text_ = "已清除";
         ShowIdleTodoPage();
     } else if (strcmp(type, "cli_session_state") == 0) {
         const char* phase = GetJsonString(root, "phase");
@@ -1371,11 +1466,11 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
     } else if (strcmp(type, "error") == 0) {
         const char* error = GetJsonString(root, "error");
         phase_ = Phase::Error;
-        status_text_ = "Error";
-        hint_text_ = (error != nullptr) ? error : "Unknown error";
+        status_text_ = "错误";
+        hint_text_ = (error != nullptr) ? error : "未知错误";
     } else if (strcmp(type, "warning") == 0) {
         const char* warning = GetJsonString(root, "warning");
-        status_text_ = "Warning";
+        status_text_ = "警告";
         hint_text_ = (warning != nullptr) ? warning : "";
     }
 
@@ -1450,8 +1545,8 @@ void LanMicApp::ToggleSelectedTodo() {
     if (todo_items_.empty() ||
         todo_selected_index_ < 0 ||
         todo_selected_index_ >= static_cast<int>(todo_items_.size())) {
-        status_text_ = "No todo";
-        hint_text_ = "Add a plan first";
+        status_text_ = "无待办";
+        hint_text_ = "请先添加计划";
         UpdateDisplay();
         return;
     }
@@ -1478,8 +1573,8 @@ void LanMicApp::DeleteSelectedTodo() {
     if (todo_items_.empty() ||
         todo_selected_index_ < 0 ||
         todo_selected_index_ >= static_cast<int>(todo_items_.size())) {
-        status_text_ = "No todo";
-        hint_text_ = "Add a plan first";
+        status_text_ = "无待办";
+        hint_text_ = "请先添加计划";
         UpdateDisplay();
         return;
     }
@@ -1563,7 +1658,7 @@ void LanMicApp::FlushPendingTodoOps() {
         pending_todo_ops_.erase(pending_todo_ops_.begin(), pending_todo_ops_.begin() + sent);
         SavePendingTodoOps();
         todo_last_action_text_ = pending_todo_ops_.empty()
-            ? "离线更改已同步"
+            ? "离线待办"
             : "部分离线更改待同步";
     }
 }
@@ -1624,7 +1719,7 @@ void LanMicApp::LoadCachedTodoState() {
     if (last_action != nullptr && last_action[0] != '\0') {
         todo_last_action_text_ = last_action;
     } else if (!todo_items_.empty()) {
-        todo_last_action_text_ = "Cached Todo";
+        todo_last_action_text_ = "缓存待办";
     }
 
     ESP_LOGI(kTag, "Loaded %u cached todo items",
@@ -1783,13 +1878,13 @@ std::string LanMicApp::GetTodoMenuItemLabel(int item) const {
     if (todo_menu_kind_ == TodoMenuKind::ReconnectStuck) {
         switch (item) {
             case 0:
-                return "Retry host";
+                return "重试连接主机";
             case 1:
-                return "Offline Todo";
+                return "进入离线待办";
             case 2:
-                return "Restart device";
+                return "重启设备";
             case 3:
-                return "Back";
+                return "返回";
             default:
                 return "";
         }
@@ -1798,15 +1893,15 @@ std::string LanMicApp::GetTodoMenuItemLabel(int item) const {
     if (todo_menu_kind_ == TodoMenuKind::Live) {
         switch (item) {
             case 0:
-                return "Go Todo";
+                return "切换到待办";
             case 1:
-                return "Reconnect host";
+                return "重新连接主机";
             case 2:
-                return "Restart device";
+                return "重启设备";
             case 3:
-                return "Settings";
+                return "设置";
             case 4:
-                return "Back";
+                return "返回";
             default:
                 return "";
         }
@@ -1820,11 +1915,11 @@ std::string LanMicApp::GetTodoMenuItemLabel(int item) const {
         const bool is_done = has_item && todo_items_[todo_selected_index_].completed;
         switch (item) {
             case 0:
-                return is_done ? "Mark not done" : "Mark done";
+                return is_done ? "标记未完成" : "标记完成";
             case 1:
-                return "Delete selected";
+                return "删除当前项";
             case 2:
-                return "Back";
+                return "返回";
             default:
                 return "";
         }
@@ -1837,17 +1932,17 @@ std::string LanMicApp::GetTodoMenuItemLabel(int item) const {
     const bool is_done = has_item && todo_items_[todo_selected_index_].completed;
     switch (item) {
         case 0:
-            return is_done ? "Mark not done" : "Mark done";
+            return is_done ? "标记未完成" : "标记完成";
         case 1:
-            return "Delete selected";
+            return "删除当前项";
         case 2:
-            return "Go Live";
+            return "切换到实时";
         case 3:
-            return "Reconnect host";
+            return "重新连接主机";
         case 4:
-            return "Restart device";
+            return "重启设备";
         case 5:
-            return "Back";
+            return "返回";
         default:
             return "";
     }
@@ -1872,13 +1967,13 @@ void LanMicApp::HandleTodoMenuInput(bool up_click, bool down_click, bool boot_pr
 void LanMicApp::ExecuteTodoMenuItem(int item) {
     auto restart_device = [this]() {
         if (!pending_todo_ops_.empty()) {
-            status_text_ = "Pending sync";
-            hint_text_ = "Reconnect before restart";
+            status_text_ = "待同步";
+            hint_text_ = "重启前请先重连";
             CloseTodoMenu();
             return;
         }
-        status_text_ = "Restarting";
-        hint_text_ = "Reconnecting host";
+        status_text_ = "重启中";
+        hint_text_ = "正在重连主机";
         UpdateDisplay();
         vTaskDelay(pdMS_TO_TICKS(300));
         esp_restart();
@@ -1888,16 +1983,16 @@ void LanMicApp::ExecuteTodoMenuItem(int item) {
         switch (item) {
             case 0:
                 if (connect_attempt_running_.load(std::memory_order_acquire)) {
-                    status_text_ = "Reconnect stuck";
-                    hint_text_ = "Choose Offline or Restart";
+                    status_text_ = "重连卡住";
+                    hint_text_ = "请选择离线或重启";
                     UpdateDisplay();
                 } else {
                     CloseTodoMenu();
-                    RequestReconnect("Retrying host...");
+                    RequestReconnect("正在重试主机...");
                 }
                 return;
             case 1:
-                EnterOfflineTodoMode("Offline Todo");
+                EnterOfflineTodoMode("离线待办");
                 return;
             case 2:
                 restart_device();
@@ -1917,7 +2012,7 @@ void LanMicApp::ExecuteTodoMenuItem(int item) {
                 return;
             case 1:
                 CloseTodoMenu();
-                RequestReconnect("Refreshing host...");
+                RequestReconnect("正在刷新主机...");
                 return;
             case 2:
                 restart_device();
@@ -1965,12 +2060,12 @@ void LanMicApp::ExecuteTodoMenuItem(int item) {
             SwitchPage(Page::Summary);
             if (!online) {
                 pending_normal_after_reconnect_ = true;
-                RequestReconnect("Reconnecting live...");
+                RequestReconnect("正在重连实时模式...");
             }
             return;
         case 3:
             CloseTodoMenu();
-            RequestReconnect(online ? "Refreshing host..." : "Retrying host...");
+            RequestReconnect(online ? "正在刷新主机..." : "正在重试主机...");
             return;
         case 4:
             restart_device();
@@ -1991,7 +2086,7 @@ void LanMicApp::EnterOfflineTodoMode(const std::string& message) {
     active_page_ = Page::Todo;
     network_state_ = IsWifiConnected() ? NetworkState::Wifi : NetworkState::Offline;
     phase_ = Phase::Idle;
-    status_text_ = "Offline Todo";
+    status_text_ = "离线待办";
     hint_text_ = "";
     todo_last_action_text_ = message;
     UpdateDisplay();
@@ -2001,14 +2096,14 @@ void LanMicApp::RequestReconnect(const std::string& message) {
     board_.SetPowerSaveLevel(PowerSaveLevel::BALANCED);
     if (!IsWifiConnected()) {
         network_state_ = NetworkState::Offline;
-        status_text_ = "No WiFi";
-        hint_text_ = "Open settings";
+        status_text_ = "无 Wi‑Fi";
+        hint_text_ = "请打开设置";
         UpdateDisplay();
         return;
     }
     if (connect_attempt_running_.load(std::memory_order_acquire)) {
-        status_text_ = "Reconnecting";
-        hint_text_ = "Waiting; restart if stuck";
+        status_text_ = "重连中";
+        hint_text_ = "请等待，卡住可重启";
         UpdateDisplay();
         return;
     }
@@ -2018,7 +2113,7 @@ void LanMicApp::RequestReconnect(const std::string& message) {
     }
     offline_todo_mode_ = false;
     network_state_ = NetworkState::Wifi;
-    status_text_ = "Connecting";
+    status_text_ = "连接中";
     hint_text_ = message;
     phase_ = Phase::Idle;
     StartConnectAttemptAsync();
@@ -2059,8 +2154,8 @@ void LanMicApp::SaveVolume() {
 
 void LanMicApp::Shutdown() {
     DisconnectWebSocket();
-    status_text_ = "Power off...";
-    hint_text_ = "Press BOOT to wake";
+    status_text_ = "关机中...";
+    hint_text_ = "按 BOOT 唤醒";
     active_page_ = Page::Summary;
     UpdateDisplay();
     vTaskDelay(pdMS_TO_TICKS(800));
@@ -2107,7 +2202,7 @@ void LanMicApp::ExecuteSettingsItem(int item) {
             EnterWifiSetupMode();
             break;
         case kSettingsItemRestart:
-            status_text_ = "Restarting...";
+            status_text_ = "重启中...";
             UpdateDisplay();
             vTaskDelay(pdMS_TO_TICKS(500));
             esp_restart();
@@ -2122,18 +2217,18 @@ void LanMicApp::ExecuteSettingsItem(int item) {
 
 const char* LanMicApp::GetNetworkLabel() const {
     if (offline_todo_mode_ && network_state_ != NetworkState::Server) {
-        return "Offline";
+        return "离线";
     }
     switch (network_state_) {
         case NetworkState::Server:
-            return "Online";
+            return "在线";
         case NetworkState::Wifi:
-            return "No Srv";
+            return "无服务器";
         case NetworkState::Config:
-            return "AP";
+            return "配网";
         case NetworkState::Offline:
         default:
-            return "Offline";
+            return "离线";
     }
 }
 
@@ -2148,21 +2243,21 @@ const char* LanMicApp::GetToolLabel() const {
 }
 
 const char* LanMicApp::GetModeLabel() const {
-    return (active_page_ == Page::Todo || offline_todo_mode_) ? "Mode: Todo" : "Mode: Live";
+    return (active_page_ == Page::Todo || offline_todo_mode_) ? "模式: 待办" : "模式: 实时";
 }
 
 std::string LanMicApp::GetPhaseLabel() const {
     switch (phase_) {
         case Phase::Recording:
-            return "● REC";
+            return "● 录音";
         case Phase::Transcribing:
-            return "... STT";
+            return "... 转写";
         case Phase::AwaitingAction:
-            return "? Send?";
+            return "? 发送?";
         case Phase::Running:
-            return "▶ AI";
+            return "▶ AI处理中";
         case Phase::Error:
-            return "! ERR";
+            return "! 错误";
         case Phase::Idle:
         default:
             return "";
@@ -2186,33 +2281,58 @@ void LanMicApp::ShowIdleTodoPage() {
 
 std::string LanMicApp::GetFooterText() const {
     if (has_pending_transcript_) {
-        return "BOOT Add | UP Send | DN Undo";
+        return "BOOT追加 | UP发送 | DN撤销";
     }
     if (phase_ == Phase::Recording) {
-        return "Release BOOT to stop";
+        return "松开 BOOT 停止";
     }
     if (network_state_ == NetworkState::Config) {
-        return "Join AP then open 192.168.4.1";
+        return "连接 AP 后打开 192.168.4.1";
     }
     if (todo_menu_open_) {
-        return "UP/DN Menu | BOOT OK";
+        return "UP/DN 菜单 | BOOT 确认";
     }
     if (active_page_ == Page::Settings) {
-        return settings_editing_volume_ ? "UP/DN ±10 | BOOT Save"
-                                        : "UP/DN Nav | BOOT OK | HoldUP Back";
+        return settings_editing_volume_ ? "UP/DN ±10 | BOOT 保存"
+                                        : "UP/DN 导航 | BOOT 确认 | 长按UP返回";
     }
     if (active_page_ == Page::Summary) {
-        return "Hold UP Menu | Hold Live";
+        if (!plan_options_.empty()) {
+            return "UP/DN 选方案 | BOOT 应用";
+        }
+        return "长按UP菜单 | 长按实时语音";
     }
     if (active_page_ == Page::Todo) {
         return IsServerConnected()
-            ? "Hold UP Menu | Hold Todo"
-            : "Hold UP Menu | UP/DN Pick";
+            ? "长按UP菜单 | 长按待办语音"
+            : "长按UP菜单 | UP/DN 选择";
     }
-    return "UP/DN Scroll | Hold UP | HoldDN Set";
+    return "UP/DN 滚动 | 长按UP | 长按DN设置";
 }
 
 std::string LanMicApp::BuildPromptBody() const {
+    if (!plan_options_.empty()) {
+        std::vector<std::string> rows;
+        const int count = static_cast<int>(plan_options_.size());
+        const int current = plan_selected_index_ < 0 ? 0 : std::clamp(plan_selected_index_, 0, count - 1);
+        const int start = std::clamp(current - 1, 0, std::max(0, count - static_cast<int>(kPromptVisibleLines)));
+        const int end = std::min(count, start + static_cast<int>(kPromptVisibleLines));
+        for (int index = start; index < end; ++index) {
+            std::string row = (index == current) ? "> " : "  ";
+            row += std::to_string(index + 1);
+            row += ". ";
+            row += plan_options_[index];
+            rows.push_back(row);
+        }
+        std::string body;
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (i > 0) {
+                body += "\n";
+            }
+            body += rows[i];
+        }
+        return body;
+    }
     if (!transcript_text_.empty()) {
         return transcript_text_;
     }
@@ -2220,32 +2340,35 @@ std::string LanMicApp::BuildPromptBody() const {
         return hint_text_;
     }
     if (offline_todo_mode_) {
-        return "Offline Todo cache";
+        return "离线待办缓存";
     }
     // Default hint based on connection state
     switch (network_state_) {
         case NetworkState::Server:
             return active_page_ == Page::Todo
-                ? "Todo voice mode\nHold UP for menu"
-                : "Live coding mode\nHold UP for menu";
+                ? "待办语音模式\n长按UP打开菜单"
+                : "实时编程模式\n长按UP打开菜单";
         case NetworkState::Wifi:
-            return "Finding server...";
+            return "正在查找服务器...";
         case NetworkState::Config:
-            return "Open 192.168.4.1";
+            return "打开 192.168.4.1";
         case NetworkState::Offline:
         default:
-            return "Connecting WiFi...";
+            return "连接 Wi‑Fi 中...";
     }
 }
 
 std::string LanMicApp::BuildReplyBody() const {
+    if (!plan_options_.empty()) {
+        return "按 BOOT 应用当前方案";
+    }
     if (!latest_assistant_text_.empty()) {
         return latest_assistant_text_;
     }
     if (!cli_status_text_.empty()) {
         return cli_status_text_;
     }
-    return "No CLI response yet";
+    return "CLI 暂无回复";
 }
 
 std::vector<std::string> LanMicApp::WrapText(const std::string& text, size_t max_chars) const {
@@ -2365,6 +2488,9 @@ void LanMicApp::UpdateDisplay() {
         return;
     }
 
+    const Page render_page = active_page_;
+    const bool render_offline_todo_mode = offline_todo_mode_;
+
     std::vector<Display::TextItem> texts;
     auto single_line = [](const std::string& value, size_t max_chars) -> std::string {
         const auto lines = WrapUtf8Lines(value, max_chars, 1);
@@ -2387,22 +2513,22 @@ void LanMicApp::UpdateDisplay() {
     }
 
     texts.push_back({GetNetworkLabel(), 28, 9, 16});
-    texts.push_back({(active_page_ == Page::Todo || offline_todo_mode_) ? "TODO" : "LIVE", 96, 9, 16});
+    texts.push_back({(render_page == Page::Todo || render_offline_todo_mode) ? "待办" : "实时", 96, 9, 16});
     texts.push_back({GetPhaseLabel(), 166, 9, 16});
     if (!quota_status_text.empty()) {
         texts.push_back({quota_status_text, 250, 9, 16});
     }
     texts.push_back({battery_text, 346, 9, 16});
-    const char* page_label = active_page_ == Page::Summary ? "Live"
-                           : active_page_ == Page::Todo    ? "Todo"
-                           : active_page_ == Page::Log     ? "Log"
-                           :                                 "Settings";
+    const char* page_label = render_page == Page::Summary ? "实时"
+                           : render_page == Page::Todo    ? "待办"
+                           : render_page == Page::Log     ? "日志"
+                           :                               "设置";
     texts.push_back({single_line(repo_name_.empty() ? "Codex" : repo_name_, 18), 12, kContentHeaderY, 16});
     texts.push_back({page_label, 316, kContentHeaderY, 16});
 
-    if (active_page_ == Page::Summary) {
+    if (render_page == Page::Summary) {
         if (todo_menu_open_ && todo_menu_kind_ == TodoMenuKind::Live) {
-            texts.push_back({"Live Menu", 12, kPromptTitleY, 16});
+            texts.push_back({"实时菜单", 12, kPromptTitleY, 16});
             texts.push_back({single_line(GetModeLabel(), 16), 228, kPromptTitleY, 16});
             std::vector<std::string> rows;
             const int count = GetTodoMenuItemCount();
@@ -2427,7 +2553,7 @@ void LanMicApp::UpdateDisplay() {
             } else {
                 status_display = GetModeLabel();
             }
-            texts.push_back({"Prompt", 12, kPromptTitleY, 16});
+            texts.push_back({"输入", 12, kPromptTitleY, 16});
             texts.push_back({single_line(status_display, 16), 228, kPromptTitleY, 16});
 
             const auto prompt_lines = SliceLines(WrapText(BuildPromptBody(), kBodyCharsPerLine), 0, kPromptVisibleLines);
@@ -2437,8 +2563,8 @@ void LanMicApp::UpdateDisplay() {
                 y += kLineHeight;
             }
 
-            texts.push_back({"Reply", 12, kReplyTitleY, 16});
-            texts.push_back({single_line(cli_status_text_.empty() ? std::string(GetToolLabel()) + " idle" : cli_status_text_, 16), 228, kReplyTitleY, 16});
+            texts.push_back({"回复", 12, kReplyTitleY, 16});
+            texts.push_back({single_line(cli_status_text_.empty() ? std::string(GetToolLabel()) + " 空闲" : cli_status_text_, 16), 228, kReplyTitleY, 16});
 
             const auto reply_lines = WrapText(BuildReplyBody(), kBodyCharsPerLine);
             const int summary_offset = std::clamp(
@@ -2452,22 +2578,22 @@ void LanMicApp::UpdateDisplay() {
                 y += kLineHeight;
             }
         }
-    } else if (active_page_ == Page::Todo) {
-        texts.push_back({todo_menu_open_ ? "Todo Menu" : "Todo", 12, kLogTitleY, 16});
+    } else if (render_page == Page::Todo) {
+        texts.push_back({todo_menu_open_ ? "待办菜单" : "待办", 12, kLogTitleY, 16});
         std::string todo_status = todo_last_action_text_.empty() ? GetModeLabel() : todo_last_action_text_;
         if (!pending_todo_ops_.empty()) {
-            todo_status = "Pending sync " + std::to_string(pending_todo_ops_.size());
+            todo_status = "待同步 " + std::to_string(pending_todo_ops_.size());
         }
         texts.push_back({single_line(todo_status, 16), 228, kLogTitleY, 16});
 
         std::vector<std::string> rows;
         if (todo_menu_open_) {
             if (todo_menu_kind_ == TodoMenuKind::ReconnectStuck) {
-                rows.push_back("Reconnect stuck");
+                rows.push_back("重连卡住");
             } else if (todo_menu_kind_ == TodoMenuKind::TodoAction) {
-                rows.push_back("Todo actions");
+                rows.push_back("待办操作");
             } else if (!IsServerConnected()) {
-                rows.push_back("Offline Todo");
+                rows.push_back("离线待办");
             } else {
                 rows.push_back(GetModeLabel());
             }
@@ -2478,8 +2604,8 @@ void LanMicApp::UpdateDisplay() {
                 rows.push_back(single_line(row, kBodyCharsPerLine));
             }
         } else if (todo_items_.empty()) {
-            rows.push_back("No plans yet");
-            rows.push_back(IsServerConnected() ? "Hold UP for menu" : "Offline cache empty");
+            rows.push_back("暂无计划");
+            rows.push_back(IsServerConnected() ? "长按UP打开菜单" : "离线缓存为空");
             rows.push_back(GetModeLabel());
         } else {
             const int visible_lines = static_cast<int>(kLogVisibleLines);
@@ -2507,9 +2633,9 @@ void LanMicApp::UpdateDisplay() {
             texts.push_back({line, 12, y, 16});
             y += kLineHeight;
         }
-    } else if (active_page_ == Page::Log) {
-        texts.push_back({"Log", 12, kLogTitleY, 16});
-        texts.push_back({single_line(cli_status_text_.empty() ? std::string(GetToolLabel()) + " idle" : cli_status_text_, 16), 228, kLogTitleY, 16});
+    } else if (render_page == Page::Log) {
+        texts.push_back({"日志", 12, kLogTitleY, 16});
+        texts.push_back({single_line(cli_status_text_.empty() ? std::string(GetToolLabel()) + " 空闲" : cli_status_text_, 16), 228, kLogTitleY, 16});
 
         std::vector<std::string> wrapped;
         for (const auto& item : cli_log_lines_) {
@@ -2517,7 +2643,7 @@ void LanMicApp::UpdateDisplay() {
             wrapped.insert(wrapped.end(), lines.begin(), lines.end());
         }
         if (wrapped.empty()) {
-            wrapped.push_back("No log yet");
+            wrapped.push_back("暂无日志");
         }
 
         const int log_offset = std::clamp(
@@ -2531,18 +2657,18 @@ void LanMicApp::UpdateDisplay() {
         }
     } else {
         // Settings page
-        texts.push_back({"Settings", 12, kLogTitleY, 16});
+        texts.push_back({"设置", 12, kLogTitleY, 16});
         if (settings_editing_volume_) {
-            texts.push_back({"UP/DN ±10 BOOT OK", 180, kLogTitleY, 14});
+            texts.push_back({"UP/DN ±10 BOOT 确认", 180, kLogTitleY, 14});
         }
 
         // Menu items
-        const std::string vol_label = "Volume: " + std::to_string(volume_) + "%";
+        const std::string vol_label = "音量: " + std::to_string(volume_) + "%";
         const char* items[kSettingsItemCount] = {
             vol_label.c_str(),
-            "Network Reset",
-            "Restart",
-            "Power Off"
+            "重置网络",
+            "重启",
+            "关机"
         };
 
         int y = kLogBodyY;
@@ -2562,7 +2688,7 @@ void LanMicApp::UpdateDisplay() {
     display_->DrawTexts(texts, true);
     DrawHorizontalLine(kStatusBarBottomY);
     DrawHorizontalLine(kHeaderLineY);
-    if (active_page_ == Page::Summary) {
+    if (render_page == Page::Summary) {
         DrawHorizontalLine(kPromptDividerY);
     }
     DrawHorizontalLine(kFooterTopY);
@@ -2628,8 +2754,8 @@ void LanMicApp::Run() {
             todo_menu_selected_item_ = 0;
             todo_menu_open_ = true;
             reconnect_prompt_started_ms = now_ms;
-            status_text_ = "Reconnect stuck";
-            hint_text_ = "Choose action";
+            status_text_ = "重连卡住";
+            hint_text_ = "请选择操作";
             phase_ = Phase::Error;
             active_page_ = Page::Todo;
             UpdateDisplay();
@@ -2637,12 +2763,12 @@ void LanMicApp::Run() {
         if (ws_disconnected_pending_.exchange(false)) {
             hello_sent_ = false;
             network_state_ = IsWifiConnected() ? NetworkState::Wifi : NetworkState::Offline;
-            status_text_ = "Disconnected";
-            hint_text_ = "Will retry automatically";
+            status_text_ = "连接已断开";
+            hint_text_ = "将自动重试";
             phase_ = Phase::Idle;
             if (active_page_ == Page::Todo || offline_todo_mode_) {
                 offline_todo_mode_ = true;
-                todo_last_action_text_ = "Offline Todo";
+                todo_last_action_text_ = "离线待办";
                 active_page_ = Page::Todo;
             } else {
                 active_page_ = Page::Summary;
@@ -2714,7 +2840,7 @@ void LanMicApp::Run() {
                 reconnect_prompt_started_ms > 0 &&
                 (now_ms - reconnect_prompt_started_ms) >= kReconnectPromptTimeoutMs) {
                 reconnect_prompt_started_ms = 0;
-                EnterOfflineTodoMode("Offline Todo");
+                EnterOfflineTodoMode("离线待办");
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
@@ -2733,7 +2859,7 @@ void LanMicApp::Run() {
                 !has_pending_transcript_ &&
                 phase_ == Phase::Idle &&
                 (now_ms - disconnected_since_ms) >= kReconnectPromptTimeoutMs) {
-                EnterOfflineTodoMode("Offline Todo");
+                EnterOfflineTodoMode("离线待办");
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
@@ -2784,8 +2910,8 @@ void LanMicApp::Run() {
             todo_menu_selected_item_ = 0;
             todo_menu_open_ = true;
             reconnect_prompt_started_ms = now_ms;
-            status_text_ = "No server";
-            hint_text_ = "Choose action";
+            status_text_ = "无服务器";
+            hint_text_ = "请选择操作";
             active_page_ = Page::Todo;
             UpdateDisplay();
         }
@@ -2797,8 +2923,8 @@ void LanMicApp::Run() {
             !offline_todo_mode_ &&
             (now_ms - disconnected_since_ms) >= kNoConnectionSleepMs) {
             DisconnectWebSocket();
-            status_text_ = "No server";
-            hint_text_ = "Press BOOT to retry";
+            status_text_ = "无服务器";
+            hint_text_ = "按 BOOT 重试";
             active_page_ = Page::Summary;
             UpdateDisplay();
             vTaskDelay(pdMS_TO_TICKS(800));
@@ -2817,11 +2943,11 @@ void LanMicApp::Run() {
                         active_page_ == Page::Todo || offline_todo_mode_;
                     DisconnectWebSocket();
                     network_state_ = IsWifiConnected() ? NetworkState::Wifi : NetworkState::Offline;
-                    status_text_ = "Server timeout";
-                    hint_text_ = should_stay_offline_todo ? "Offline Todo" : "Retrying host...";
+                    status_text_ = "服务器超时";
+                    hint_text_ = should_stay_offline_todo ? "离线待办" : "正在重试主机...";
                     phase_ = Phase::Idle;
                     if (should_stay_offline_todo) {
-                        EnterOfflineTodoMode("Offline Todo");
+                        EnterOfflineTodoMode("离线待办");
                     } else {
                         active_page_ = Page::Summary;
                     }
@@ -2862,11 +2988,11 @@ void LanMicApp::Run() {
                          static_cast<long long>(now_ms));
                 const bool should_stay_offline_todo =
                     active_page_ == Page::Todo || offline_todo_mode_;
-                status_text_ = "Server timeout";
-                hint_text_ = should_stay_offline_todo ? "Offline Todo" : "Retrying host...";
+                status_text_ = "服务器超时";
+                hint_text_ = should_stay_offline_todo ? "离线待办" : "正在重试主机...";
                 phase_ = Phase::Idle;
                 if (should_stay_offline_todo) {
-                    EnterOfflineTodoMode("Offline Todo");
+                    EnterOfflineTodoMode("离线待办");
                 } else {
                     DisconnectWebSocket();
                     active_page_ = Page::Summary;
@@ -2887,6 +3013,11 @@ void LanMicApp::Run() {
             }
         }
 
+        const bool selecting_plan =
+            active_page_ == Page::Summary &&
+            !has_pending_transcript_ &&
+            !plan_options_.empty();
+
         if (up_click) {
             if (has_pending_transcript_) {
                 if (IsServerConnected()) {
@@ -2896,8 +3027,14 @@ void LanMicApp::Run() {
                     reconnect_interval_ms = kReconnectIntervalMinMs;
                     last_reconnect_ms = now_ms;
                     StartConnectAttemptAsync();
-                    status_text_ = "Connecting";
-                    hint_text_ = "Retrying host...";
+                    status_text_ = "连接中";
+                    hint_text_ = "正在重试主机...";
+                    UpdateDisplay();
+                }
+            } else if (selecting_plan) {
+                if (!SendPlanSelect(-1)) {
+                    status_text_ = "方案选择失败";
+                    hint_text_ = "检查连接";
                     UpdateDisplay();
                 }
             } else if (active_page_ == Page::Todo) {
@@ -2915,8 +3052,14 @@ void LanMicApp::Run() {
                     reconnect_interval_ms = kReconnectIntervalMinMs;
                     last_reconnect_ms = now_ms;
                     StartConnectAttemptAsync();
-                    status_text_ = "Connecting";
-                    hint_text_ = "Retrying host...";
+                    status_text_ = "连接中";
+                    hint_text_ = "正在重试主机...";
+                    UpdateDisplay();
+                }
+            } else if (selecting_plan) {
+                if (!SendPlanSelect(1)) {
+                    status_text_ = "方案选择失败";
+                    hint_text_ = "检查连接";
                     UpdateDisplay();
                 }
             } else if (active_page_ == Page::Todo) {
@@ -2934,6 +3077,36 @@ void LanMicApp::Run() {
                      static_cast<int>(phase_));
             boot_pressed_since_ms = now_ms;
             todo_hold_started = false;
+            const bool selecting_plan =
+                active_page_ == Page::Summary &&
+                !has_pending_transcript_ &&
+                !plan_options_.empty();
+            if (selecting_plan) {
+                if (!IsServerConnected()) {
+                    disconnected_since_ms = now_ms;
+                    reconnect_interval_ms = kReconnectIntervalMinMs;
+                    last_reconnect_ms = now_ms;
+                    StartConnectAttemptAsync();
+                    status_text_ = "连接中";
+                    hint_text_ = "正在重试主机...";
+                    UpdateDisplay();
+                } else if (SendPlanApply()) {
+                    status_text_ = "正在应用方案";
+                    hint_text_ = "等待结果";
+                    phase_ = Phase::Running;
+                    plan_options_.clear();
+                    plan_selected_index_ = -1;
+                    summary_scroll_offset_ = 0;
+                    UpdateDisplay();
+                } else {
+                    status_text_ = "方案应用失败";
+                    hint_text_ = "检查连接";
+                    UpdateDisplay();
+                }
+                last_pressed = true;
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
+            }
             const bool can_open_page_menu =
                 phase_ == Phase::Idle || phase_ == Phase::Error;
             const bool defer_page_press =
@@ -2950,8 +3123,8 @@ void LanMicApp::Run() {
                 reconnect_interval_ms = kReconnectIntervalMinMs;
                 last_reconnect_ms = now_ms;
                 StartConnectAttemptAsync();
-                hint_text_ = "Retrying host...";
-                status_text_ = "Connecting";
+                hint_text_ = "正在重试主机...";
+                status_text_ = "连接中";
                 phase_ = Phase::Idle;
                 UpdateDisplay();
             } else {
@@ -2959,10 +3132,9 @@ void LanMicApp::Run() {
                 ESP_LOGI(kTag, "PTT start");
                 SendPttStart();
                 phase_ = Phase::Recording;
-                status_text_ = "Recording";
-                hint_text_ = "Release BOOT to send";
-                // Flush a short rolling buffer first so speech around the
-                // button edge is not clipped.
+                status_text_ = "录音中";
+                hint_text_ = "松开 BOOT 发送";
+                CapturePrerollFrame();
                 FlushPrerollFrames();
                 StreamAudioFrame();
                 UpdateDisplay();
@@ -2980,8 +3152,8 @@ void LanMicApp::Run() {
             IsServerConnected() &&
             (now_ms - boot_pressed_since_ms) >= kTodoBootHoldMs) {
             if (!SyncVoiceModeToActivePage()) {
-                status_text_ = "Mode error";
-                hint_text_ = "Try again";
+                status_text_ = "模式错误";
+                hint_text_ = "请重试";
                 UpdateDisplay();
                 vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
@@ -2990,8 +3162,9 @@ void LanMicApp::Run() {
             ESP_LOGI(kTag, "PTT start from page hold");
             SendPttStart();
             phase_ = Phase::Recording;
-            status_text_ = "Recording";
-            hint_text_ = "Release BOOT to send";
+            status_text_ = "录音中";
+            hint_text_ = "松开 BOOT 发送";
+            CapturePrerollFrame();
             FlushPrerollFrames();
             StreamAudioFrame();
             UpdateDisplay();
@@ -3003,7 +3176,24 @@ void LanMicApp::Run() {
                 ESP_LOGI(kTag, "PTT stop");
                 SendPttStop();
                 phase_ = Phase::Transcribing;
-                status_text_ = "Transcribing";
+                status_text_ = "转写中";
+                UpdateDisplay();
+            } else if (active_page_ == Page::Summary &&
+                       !todo_hold_started &&
+                       boot_pressed_since_ms > 0 &&
+                       !has_pending_transcript_ &&
+                       phase_ == Phase::Idle &&
+                       IsServerConnected() &&
+                       send_target_ == "text_injector") {
+                if (SendEnter()) {
+                    status_text_ = "已发送回车";
+                    hint_text_ = "短按 BOOT 回车";
+                    phase_ = Phase::Idle;
+                } else {
+                    status_text_ = "回车失败";
+                    hint_text_ = "检查连接";
+                    phase_ = Phase::Error;
+                }
                 UpdateDisplay();
             } else if (active_page_ == Page::Todo &&
                        !todo_hold_started &&

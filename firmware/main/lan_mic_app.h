@@ -121,6 +121,8 @@ private:
     std::vector<std::string> cli_log_lines_;
     std::vector<TodoItem> todo_items_;
     std::vector<PendingTodoOp> pending_todo_ops_;
+    std::vector<std::string> plan_options_;
+    int plan_selected_index_ = -1;
     int todo_selected_index_ = -1;
     std::string todo_last_action_text_;
     bool todo_menu_open_ = false;
@@ -147,6 +149,7 @@ private:
     void SaveCachedServerUri(const std::string& server_uri);
     void SavePairedHost(const std::string& host_id, const std::string& host_name);
     void ClearPersistedHost();
+    void ClearCachedServerUri();
     void RequestWifiReconfigureByReboot(const char* status_text, const char* hint_text);
     void ConfigureButtons();
     bool IsWifiConnected() const;
@@ -168,9 +171,12 @@ private:
     bool SendHello();
     bool SendPttStart();
     bool SendPttStop();
+    bool SendEnter();
     bool SendAction(const char* action_type);
     bool SendSetMode(const char* mode);
     bool SendTodoCommand(const char* action, int index = 0, int completed = -1, const char* id = nullptr);
+    bool SendPlanSelect(int direction);
+    bool SendPlanApply();
     VoiceMode DesiredVoiceModeForPage(Page page) const;
     bool SyncVoiceModeToPage(Page page);
     bool SyncVoiceModeToActivePage();

@@ -2,6 +2,7 @@
 #include <esp_log.h>
 #include <esp_crt_bundle.h>
 #include <esp_tls_errors.h>
+#include <esp_idf_version.h>
 #include <cstring>
 #include <unistd.h>
 #include <mutex>
@@ -69,7 +70,9 @@ bool EspSsl::Connect(const std::string& host, int port) {
 
     esp_tls_cfg_t cfg = {};
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
+#if defined(ESP_TLS_DYN_BUF_RX_STATIC)
     cfg.esp_tls_dyn_buf_strategy = ESP_TLS_DYN_BUF_RX_STATIC;
+#endif
     cfg.timeout_ms = kReceivePollTimeoutMs;
 #if CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
     bool resume_attempt = false;

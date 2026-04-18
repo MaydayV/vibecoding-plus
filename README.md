@@ -1,4 +1,4 @@
-# vibecoding-voice
+# vibecoding-plus
 
 [English](#english) · [中文](#中文)
 
@@ -12,7 +12,7 @@ Follow the author on X: [@mac20777](https://x.com/intent/follow?screen_name=mac2
 
 > Now includes a Windows desktop app with tray mode, start-on-login, a local settings UI, and packaged installers, so non-technical users can use it without touching a terminal.
 
-`vibecoding-voice` is a two-part open-source project:
+`vibecoding-plus` is a two-part open-source project:
 
 1. **Host bridge** (this repo) — a Node.js server that runs on your PC. It receives push-to-talk audio from an ESP32 device over WebSocket, transcribes it, and either injects the text into the active Windows input field or drives a Codex / Claude Code CLI session.
 2. **ESP32 firmware** (`firmware/`) — runs on supported e-paper boards such as Zectrix S3 and Waveshare S3, and is intended to grow into a fully DIY ESP32-S3 hardware path as well. It handles Wi-Fi, push-to-talk recording, device-side confirmation UI, and renders live CLI output on the e-ink screen.
@@ -67,7 +67,7 @@ Both boards use ESP32-S3 with onboard MEMS mic and push-button.
 ### Features
 
 - 16 kHz mono PCM audio ingest over WebSocket
-- STT via Volcengine Flash ASR or OpenAI Whisper
+- STT via Volcengine Flash ASR, OpenAI Whisper, or local whisper.cpp
 - Windows text injection via clipboard (Ctrl+V)
 - Windows desktop app with tray icon, start on login, hidden launch, close-to-tray behavior, and packaged installer output
 - Local desktop settings UI with grouped tabs for mode, speech provider, workspace, and advanced options
@@ -93,6 +93,7 @@ Both boards use ESP32-S3 with onboard MEMS mic and push-button.
 - An STT provider key:
   - Volcengine: `VOLCENGINE_APP_KEY` + `VOLCENGINE_ACCESS_KEY`
   - OpenAI: `OPENAI_API_KEY`
+  - Local whisper.cpp: `WHISPER_CPP_MODEL_PATH` (plus `whisper-cli` installed)
 
 #### Quick Start
 
@@ -101,7 +102,7 @@ Both boards use ESP32-S3 with onboard MEMS mic and push-button.
 Recommended global install:
 
 ```powershell
-npm install -g @mac20777/vibecoding-voice
+npm install -g @mac20777/vibecoding-plus
 ```
 
 From source (development):
@@ -149,9 +150,9 @@ The wizard also lets you choose how transcripts are delivered. The recommended d
 
 The wizard saves user-level config to:
 
-- Windows: `%APPDATA%\vibecoding-voice\config.env`
-- macOS: `~/Library/Application Support/vibecoding-voice/config.env`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/vibecoding-voice/config.env`
+- Windows: `%APPDATA%\vibecoding-plus\config.env`
+- macOS: `~/Library/Application Support/vibecoding-plus/config.env`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/vibecoding-plus/config.env`
 
 You can still use environment variables or a local `.env` file. A local `.env` overrides the user-level config.
 
@@ -255,7 +256,7 @@ This means a local `.env` in your current project overrides the saved user-level
 #### Troubleshooting
 
 - `vibe` says STT is not configured:
-  Run `vibe config` and enter either Volcengine or OpenAI credentials.
+  Run `vibe config` and enter Volcengine, OpenAI, or local whisper.cpp settings.
 - `vibe config` saved successfully, but old values are still used:
   Run `vibe doctor` and check whether a local `.env` is overriding the user config.
 - The board sends immediately after recording, but you expected `UP` to confirm:
@@ -359,7 +360,7 @@ Screen footer shows `BOOT Add · UP Send · DN Undo` when a transcript is pendin
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STT_PROVIDER` | auto-detect | `volcengine` or `openai` |
+| `STT_PROVIDER` | auto-detect | `volcengine`, `openai`, or `whisper_cpp` |
 | `VOLCENGINE_APP_KEY` | — | Volcengine app key |
 | `VOLCENGINE_ACCESS_KEY` | — | Volcengine access key |
 | `VOLCENGINE_RESOURCE_ID` | `volc.bigasr.auc_turbo` | ASR resource ID |
@@ -367,6 +368,12 @@ Screen footer shows `BOOT Add · UP Send · DN Undo` when a transcript is pendin
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `OPENAI_TRANSCRIBE_MODEL` | `whisper-1` | Transcription model |
 | `OPENAI_TRANSCRIBE_LANGUAGE` | — | e.g. `zh` |
+| `WHISPER_CPP_COMMAND` | `whisper-cli` | whisper.cpp command |
+| `WHISPER_CPP_MODEL_PATH` | — | Local whisper.cpp model path |
+| `WHISPER_CPP_LANGUAGE` | `zh` | whisper.cpp language |
+| `WHISPER_CPP_THREADS` | `4` | whisper.cpp threads |
+| `WHISPER_CPP_EXTRA_ARGS` | — | Extra whisper.cpp args |
+| `WHISPER_CPP_TIMEOUT_MS` | `45000` | whisper.cpp timeout in milliseconds |
 
 #### Network
 
@@ -458,7 +465,7 @@ node scripts/console.mjs
 
 > 现在已经带有 Windows 桌面版：支持托盘、自启动、本地设置界面和安装包，普通用户不用碰命令行也能直接用。
 
-`vibecoding-voice` 是一个由两部分组成的开源项目：
+`vibecoding-plus` 是一个由两部分组成的开源项目：
 
 1. **主机桥接服务**（本仓库）— 运行在你电脑上的 Node.js 服务器。它通过 WebSocket 从 ESP32 设备接收按键说话（PTT）音频，调用语音识别将其转写，然后注入 Windows 当前输入框，或者驱动 Codex / Claude Code CLI 会话。
 2. **ESP32 固件**（`firmware/` 目录）— 可运行在 Zectrix S3、Waveshare S3 这类已支持的电子墨水屏开发板上，后续也会补一个完全 DIY 的 ESP32-S3 硬件方案。负责 Wi-Fi 连接、按键录音、设备端确认界面，并将 CLI 实时输出渲染到电子墨水屏上。
@@ -538,6 +545,7 @@ node scripts/console.mjs
 - 语音识别密钥（二选一）：
   - 火山引擎：`VOLCENGINE_APP_KEY` + `VOLCENGINE_ACCESS_KEY`
   - OpenAI：`OPENAI_API_KEY`
+  - 本地 whisper.cpp：`WHISPER_CPP_MODEL_PATH`（并安装 `whisper-cli`）
 
 #### 快速开始
 
@@ -546,7 +554,7 @@ node scripts/console.mjs
 推荐直接全局安装：
 
 ```powershell
-npm install -g @mac20777/vibecoding-voice
+npm install -g @mac20777/vibecoding-plus
 ```
 
 如果你是在源码仓库里开发：
@@ -594,9 +602,9 @@ vibe config
 
 向导会把用户级配置保存到：
 
-- Windows：`%APPDATA%\vibecoding-voice\config.env`
-- macOS：`~/Library/Application Support/vibecoding-voice/config.env`
-- Linux：`${XDG_CONFIG_HOME:-~/.config}/vibecoding-voice/config.env`
+- Windows：`%APPDATA%\vibecoding-plus\config.env`
+- macOS：`~/Library/Application Support/vibecoding-plus/config.env`
+- Linux：`${XDG_CONFIG_HOME:-~/.config}/vibecoding-plus/config.env`
 
 你仍然可以继续使用环境变量或当前目录下的 `.env` 文件；本地 `.env` 的优先级更高。
 
@@ -697,7 +705,7 @@ Todo 命令；它不会启动 Codex/Claude，也不会直接执行 CRUD。用户
 #### 常见问题
 
 - 提示 STT 未配置：
-  运行 `vibe config`，填写火山引擎或 OpenAI 的密钥。
+  运行 `vibe config`，填写火山引擎、OpenAI 或本地 whisper.cpp 的配置。
 - 明明已经运行过 `vibe config`，但还是用了旧值：
   运行 `vibe doctor`，检查是不是被当前目录下的 `.env` 覆盖了。
 - 板子录完音就直接发了，没有等 `UP` 确认：
@@ -801,7 +809,7 @@ LAN_SHARED_SECRET=你的密钥
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `STT_PROVIDER` | 自动检测 | `volcengine` 或 `openai` |
+| `STT_PROVIDER` | 自动检测 | `volcengine`、`openai` 或 `whisper_cpp` |
 | `VOLCENGINE_APP_KEY` | — | 火山引擎 App Key |
 | `VOLCENGINE_ACCESS_KEY` | — | 火山引擎 Access Key |
 | `VOLCENGINE_RESOURCE_ID` | `volc.bigasr.auc_turbo` | ASR 资源 ID |
@@ -809,6 +817,12 @@ LAN_SHARED_SECRET=你的密钥
 | `OPENAI_API_KEY` | — | OpenAI API 密钥 |
 | `OPENAI_TRANSCRIBE_MODEL` | `whisper-1` | 转写模型 |
 | `OPENAI_TRANSCRIBE_LANGUAGE` | — | 例如 `zh` |
+| `WHISPER_CPP_COMMAND` | `whisper-cli` | whisper.cpp 命令 |
+| `WHISPER_CPP_MODEL_PATH` | — | 本地 whisper.cpp 模型路径 |
+| `WHISPER_CPP_LANGUAGE` | `zh` | whisper.cpp 识别语言 |
+| `WHISPER_CPP_THREADS` | `4` | whisper.cpp 线程数 |
+| `WHISPER_CPP_EXTRA_ARGS` | — | whisper.cpp 额外参数 |
+| `WHISPER_CPP_TIMEOUT_MS` | `45000` | whisper.cpp 超时时间（毫秒） |
 
 #### 网络
 

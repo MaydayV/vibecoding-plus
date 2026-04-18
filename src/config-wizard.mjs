@@ -174,12 +174,21 @@ async function askYesNo(rl, label, defaultYes = true) {
 }
 
 async function askProvider(rl, currentProvider) {
-  const defaultOption = currentProvider === "openai" ? "2" : "1";
+  const defaultOption =
+    currentProvider === "openai"
+      ? "2"
+      : currentProvider === "whisper_cpp"
+        ? "3"
+        : currentProvider === "qwen_asr"
+          ? "4"
+          : "1";
 
   while (true) {
     output.write("Choose your STT provider:\n");
     output.write("  1. Volcengine (VOLCENGINE_APP_KEY + VOLCENGINE_ACCESS_KEY)\n");
     output.write("  2. OpenAI (OPENAI_API_KEY)\n");
+    output.write("  3. whisper.cpp local (WHISPER_CPP_MODEL_PATH)\n");
+    output.write("  4. Qwen3-ASR realtime WebSocket (official online API)\n");
     const answer = String(await rl.question(`Selection [${defaultOption}]: `)).trim();
     const selection = answer || defaultOption;
 
@@ -189,8 +198,14 @@ async function askProvider(rl, currentProvider) {
     if (selection === "2" || selection.toLowerCase() === "openai") {
       return "openai";
     }
+    if (selection === "3" || selection.toLowerCase() === "whisper_cpp") {
+      return "whisper_cpp";
+    }
+    if (selection === "4" || selection.toLowerCase() === "qwen_asr") {
+      return "qwen_asr";
+    }
 
-    output.write("Please choose 1 or 2.\n");
+    output.write("Please choose 1, 2, 3, or 4.\n");
   }
 }
 
@@ -277,7 +292,7 @@ export async function runConfigWizard() {
       updates.VOLCENGINE_LANGUAGE = await askText(rl, "VOLCENGINE_LANGUAGE", {
         defaultValue: currentConfig.volcengineLanguage || "zh-CN"
       });
-    } else {
+    } else if (provider === "openai") {
       updates.OPENAI_API_KEY = await askSecret(rl, mutedOutput, "OPENAI_API_KEY", {
         defaultValue: currentConfig.openaiApiKey
       });
@@ -288,6 +303,49 @@ export async function runConfigWizard() {
         defaultValue: currentConfig.openaiLanguage,
         optional: true,
         allowClear: true
+      });
+    } else if (provider === "whisper_cpp") {
+      updates.WHISPER_CPP_MODEL_PATH = await askText(rl, "WHISPER_CPP_MODEL_PATH", {
+        defaultValue: currentConfig.whisperCppModelPath,
+        optional: false
+      });
+      updates.WHISPER_CPP_LANGUAGE = await askText(rl, "WHISPER_CPP_LANGUAGE", {
+        defaultValue: currentConfig.whisperCppLanguage || "zh"
+      });
+      updates.WHISPER_CPP_THREADS = await askText(rl, "WHISPER_CPP_THREADS", {
+        defaultValue: String(currentConfig.whisperCppThreads || 4)
+      });
+      updates.WHISPER_CPP_COMMAND = await askText(rl, "WHISPER_CPP_COMMAND", {
+        defaultValue: currentConfig.whisperCppCommand || "whisper-cli"
+      });
+      updates.WHISPER_CPP_EXTRA_ARGS = await askText(rl, "WHISPER_CPP_EXTRA_ARGS", {
+        defaultValue: currentConfig.whisperCppExtraArgs,
+        optional: true,
+        allowClear: true
+      });
+    } else {
+      updates.QWEN_ASR_MODEL = await askText(rl, "QWEN_ASR_MODEL", {
+        defaultValue: currentConfig.qwenAsrModel || "qwen3-asr-flash-realtime"
+      });
+      updates.QWEN_ASR_API_KEY = await askSecret(rl, mutedOutput, "QWEN_ASR_API_KEY (or DASHSCOPE_API_KEY)", {
+        defaultValue: currentConfig.qwenAsrApiKey
+      });
+      updates.QWEN_ASR_REALTIME_BASE_URL = await askText(rl, "QWEN_ASR_REALTIME_BASE_URL", {
+        defaultValue: currentConfig.qwenAsrRealtimeBaseUrl || "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+      });
+      updates.QWEN_ASR_SAMPLE_RATE = await askText(rl, "QWEN_ASR_SAMPLE_RATE", {
+        defaultValue: String(currentConfig.qwenAsrSampleRate || 16000)
+      });
+      updates.QWEN_ASR_LANGUAGE = await askText(rl, "QWEN_ASR_LANGUAGE", {
+        defaultValue: currentConfig.qwenAsrLanguage || "zh"
+      });
+      updates.QWEN_ASR_PROMPT = await askText(rl, "QWEN_ASR_PROMPT", {
+        defaultValue: currentConfig.qwenAsrPrompt,
+        optional: true,
+        allowClear: true
+      });
+      updates.QWEN_ASR_TIMEOUT_MS = await askText(rl, "QWEN_ASR_TIMEOUT_MS", {
+        defaultValue: String(currentConfig.qwenAsrTimeoutMs || 45000)
       });
     }
 
@@ -325,11 +383,26 @@ export async function runConfigWizard() {
       output.write(`  VOLCENGINE_ACCESS_KEY=${redactValue(updates.VOLCENGINE_ACCESS_KEY)}\n`);
       output.write(`  VOLCENGINE_RESOURCE_ID=${updates.VOLCENGINE_RESOURCE_ID}\n`);
       output.write(`  VOLCENGINE_LANGUAGE=${updates.VOLCENGINE_LANGUAGE}\n`);
-    } else {
+    } else if (provider === "openai") {
       output.write(`  OPENAI_API_KEY=${redactValue(updates.OPENAI_API_KEY)}\n`);
       output.write(`  OPENAI_TRANSCRIBE_MODEL=${updates.OPENAI_TRANSCRIBE_MODEL}\n`);
       output.write(`  OPENAI_TRANSCRIBE_LANGUAGE=${updates.OPENAI_TRANSCRIBE_LANGUAGE || "(auto)"}\n`);
+    } else if (provider === "whisper_cpp") {
+      output.write(`  WHISPER_CPP_MODEL_PATH=${updates.WHISPER_CPP_MODEL_PATH}\n`);
+      output.write(`  WHISPER_CPP_LANGUAGE=${updates.WHISPER_CPP_LANGUAGE}\n`);
+      output.write(`  WHISPER_CPP_THREADS=${updates.WHISPER_CPP_THREADS}\n`);
+      output.write(`  WHISPER_CPP_COMMAND=${updates.WHISPER_CPP_COMMAND}\n`);
+      output.write(`  WHISPER_CPP_EXTRA_ARGS=${updates.WHISPER_CPP_EXTRA_ARGS || "(none)"}\n`);
+    } else {
+      output.write(`  QWEN_ASR_MODEL=${updates.QWEN_ASR_MODEL}\n`);
+      output.write(`  QWEN_ASR_API_KEY=${redactValue(updates.QWEN_ASR_API_KEY)}\n`);
+      output.write(`  QWEN_ASR_REALTIME_BASE_URL=${updates.QWEN_ASR_REALTIME_BASE_URL}\n`);
+      output.write(`  QWEN_ASR_SAMPLE_RATE=${updates.QWEN_ASR_SAMPLE_RATE}\n`);
+      output.write(`  QWEN_ASR_LANGUAGE=${updates.QWEN_ASR_LANGUAGE}\n`);
+      output.write(`  QWEN_ASR_PROMPT=${updates.QWEN_ASR_PROMPT || "(none)"}\n`);
+      output.write(`  QWEN_ASR_TIMEOUT_MS=${updates.QWEN_ASR_TIMEOUT_MS}\n`);
     }
+
     output.write(`  TRANSCRIPT_DELIVERY_MODE=${updates.TRANSCRIPT_DELIVERY_MODE}\n`);
     output.write(`  TEXT_INJECTION_MODE=${updates.TEXT_INJECTION_MODE}\n`);
     output.write(`  TODO_INTENT_PROVIDER=${updates.TODO_INTENT_PROVIDER}\n`);
@@ -389,7 +462,7 @@ export async function ensureConfigReadyInteractive() {
 
   const result = await runConfigWizard();
   if (!result.saved) {
-    throw new Error(`Missing configuration. Run "vibe config" to finish setup.`);
+    throw new Error("Missing configuration. Run \"vibe config\" to finish setup.");
   }
 
   const refreshedConfig = loadConfig({ quietMissing: true });

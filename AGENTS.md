@@ -61,6 +61,7 @@ server.mjs (entry point — HTTP + WebSocket server)
 **Required** (one STT provider):
 - `OPENAI_API_KEY` — for Whisper
 - `VOLCENGINE_APP_KEY` + `VOLCENGINE_ACCESS_KEY` — for Volcengine ASR
+- `WHISPER_CPP_MODEL_PATH` — for local whisper.cpp ASR
 
 **Key settings**:
 - `SEND_TARGET`: `text_injector` (default), `codex_exec`, or `Codex`

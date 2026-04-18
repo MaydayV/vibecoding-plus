@@ -17,6 +17,17 @@ const elements = {
   openaiModel: document.querySelector("#openai-model"),
   volcengineAppKey: document.querySelector("#volcengine-app-key"),
   volcengineAccessKey: document.querySelector("#volcengine-access-key"),
+  whisperCppModelPath: document.querySelector("#whisper-cpp-model-path"),
+  whisperCppLanguage: document.querySelector("#whisper-cpp-language"),
+  whisperCppThreads: document.querySelector("#whisper-cpp-threads"),
+  whisperCppCommand: document.querySelector("#whisper-cpp-command"),
+  whisperCppExtraArgs: document.querySelector("#whisper-cpp-extra-args"),
+  qwenAsrApiKey: document.querySelector("#qwen-asr-api-key"),
+  qwenAsrModel: document.querySelector("#qwen-asr-model"),
+  qwenAsrLanguage: document.querySelector("#qwen-asr-language"),
+  qwenAsrPrompt: document.querySelector("#qwen-asr-prompt"),
+  qwenAsrSampleRate: document.querySelector("#qwen-asr-sample-rate"),
+  qwenAsrRealtimeBaseUrl: document.querySelector("#qwen-asr-realtime-base-url"),
   lanSharedSecret: document.querySelector("#lan-shared-secret"),
   codexCwd: document.querySelector("#codex-cwd"),
   claudeCwd: document.querySelector("#claude-cwd"),
@@ -74,7 +85,16 @@ function modeLabel(mode) {
 }
 
 function providerLabel(provider) {
-  return provider === "openai" ? "OpenAI" : "Volcengine";
+  if (provider === "openai") {
+    return "OpenAI";
+  }
+  if (provider === "whisper_cpp") {
+    return "whisper.cpp (local)";
+  }
+  if (provider === "qwen_asr") {
+    return "Qwen3-ASR";
+  }
+  return "Volcengine";
 }
 
 function deliveryLabel(mode) {
@@ -168,10 +188,16 @@ function renderConfigSummary() {
       ? `${deliveryLabel(elements.transcriptDeliveryMode.value)} · ${injectionLabel(elements.textInjectionMode.value)}`
       : deliveryLabel(elements.transcriptDeliveryMode.value);
   elements.summaryProvider.textContent = providerLabel(elements.sttProvider.value);
-  elements.summaryProviderDetail.textContent =
-    elements.sttProvider.value === "openai"
-      ? `模型：${elements.openaiModel.value || "whisper-1"}`
-      : "适合中文语音环境";
+  if (elements.sttProvider.value === "openai") {
+    elements.summaryProviderDetail.textContent = `模型：${elements.openaiModel.value || "whisper-1"}`;
+  } else if (elements.sttProvider.value === "whisper_cpp") {
+    elements.summaryProviderDetail.textContent = `本地模型：${elements.whisperCppModelPath.value || "(未设置)"}`;
+  } else if (elements.sttProvider.value === "qwen_asr") {
+    const model = elements.qwenAsrModel.value || "qwen3-asr-flash-realtime";
+    elements.summaryProviderDetail.textContent = `realtime_ws · ${model}`;
+  } else {
+    elements.summaryProviderDetail.textContent = "适合中文语音环境";
+  }
   elements.summaryLaunch.textContent = launchLabel({
     autoLaunch: elements.autoLaunch.checked,
     launchToTray: elements.launchToTray.checked
@@ -198,6 +224,17 @@ function collectFormPayload() {
       openaiModel: elements.openaiModel.value,
       volcengineAppKey: elements.volcengineAppKey.value,
       volcengineAccessKey: elements.volcengineAccessKey.value,
+      whisperCppModelPath: elements.whisperCppModelPath.value,
+      whisperCppLanguage: elements.whisperCppLanguage.value,
+      whisperCppThreads: elements.whisperCppThreads.value,
+      whisperCppCommand: elements.whisperCppCommand.value,
+      whisperCppExtraArgs: elements.whisperCppExtraArgs.value,
+      qwenAsrApiKey: elements.qwenAsrApiKey.value,
+      qwenAsrModel: elements.qwenAsrModel.value,
+      qwenAsrLanguage: elements.qwenAsrLanguage.value,
+      qwenAsrPrompt: elements.qwenAsrPrompt.value,
+      qwenAsrSampleRate: elements.qwenAsrSampleRate.value,
+      qwenAsrRealtimeBaseUrl: elements.qwenAsrRealtimeBaseUrl.value,
       lanSharedSecret: elements.lanSharedSecret.value,
       codexCwd: elements.codexCwd.value,
       claudeCwd: elements.claudeCwd.value,
@@ -221,6 +258,17 @@ function fillForm(form, desktopSettingsPath) {
   elements.openaiModel.value = form.openaiModel || "";
   elements.volcengineAppKey.value = form.volcengineAppKey || "";
   elements.volcengineAccessKey.value = form.volcengineAccessKey || "";
+  elements.whisperCppModelPath.value = form.whisperCppModelPath || "";
+  elements.whisperCppLanguage.value = form.whisperCppLanguage || "";
+  elements.whisperCppThreads.value = form.whisperCppThreads || "";
+  elements.whisperCppCommand.value = form.whisperCppCommand || "";
+  elements.whisperCppExtraArgs.value = form.whisperCppExtraArgs || "";
+  elements.qwenAsrApiKey.value = form.qwenAsrApiKey || "";
+  elements.qwenAsrModel.value = form.qwenAsrModel || "";
+  elements.qwenAsrLanguage.value = form.qwenAsrLanguage || "";
+  elements.qwenAsrPrompt.value = form.qwenAsrPrompt || "";
+  elements.qwenAsrSampleRate.value = form.qwenAsrSampleRate || "";
+  elements.qwenAsrRealtimeBaseUrl.value = form.qwenAsrRealtimeBaseUrl || "";
   elements.lanSharedSecret.value = form.lanSharedSecret || "";
   elements.codexCwd.value = form.codexCwd || "";
   elements.claudeCwd.value = form.claudeCwd || "";
@@ -433,6 +481,8 @@ elements.sendTarget.addEventListener("change", updateFormAffordances);
 elements.transcriptDeliveryMode.addEventListener("change", renderConfigSummary);
 elements.textInjectionMode.addEventListener("change", renderConfigSummary);
 elements.openaiModel.addEventListener("input", renderConfigSummary);
+elements.whisperCppModelPath.addEventListener("input", renderConfigSummary);
+elements.qwenAsrModel.addEventListener("input", renderConfigSummary);
 elements.autoLaunch.addEventListener("change", renderConfigSummary);
 elements.launchToTray.addEventListener("change", renderConfigSummary);
 elements.closeToTray.addEventListener("change", renderConfigSummary);

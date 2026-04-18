@@ -35,6 +35,17 @@ test("buildDesktopFormState exposes effective config values for the desktop UI",
       openaiModel: "gpt-4o-mini-transcribe",
       volcengineAppKey: "",
       volcengineAccessKey: "",
+      whisperCppModelPath: "",
+      whisperCppLanguage: "zh",
+      whisperCppThreads: 4,
+      whisperCppCommand: "whisper-cli",
+      whisperCppExtraArgs: "",
+      qwenAsrApiKey: "",
+      qwenAsrModel: "Qwen/Qwen3-ASR-0.6B",
+      qwenAsrLanguage: "zh",
+      qwenAsrPrompt: "",
+      qwenAsrSampleRate: 16000,
+      qwenAsrRealtimeBaseUrl: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
       transcriptDeliveryMode: "immediate",
       textInjectionMode: "type_only",
       lanSharedSecret: "secret",
@@ -42,10 +53,10 @@ test("buildDesktopFormState exposes effective config values for the desktop UI",
       claudeCwd: "D:/claude",
       codexSkipGitRepoCheck: true,
       claudeDangerouslySkipPermissions: true,
-      loadedConfigFiles: ["C:/Users/test/AppData/Roaming/vibecoding-voice/config.env", "D:/github/app/.env"],
-      userConfigPath: "C:/Users/test/AppData/Roaming/vibecoding-voice/config.env",
+      loadedConfigFiles: ["C:/Users/test/AppData/Roaming/vibecoding-plus/config.env", "D:/github/app/.env"],
+      userConfigPath: "C:/Users/test/AppData/Roaming/vibecoding-plus/config.env",
       cwdConfigPath: "D:/github/app/.env",
-      projectConfigPath: "D:/github/vibecoding-voice/.env",
+      projectConfigPath: "D:/github/vibecoding-plus/.env",
       port: 8765,
       discoveryPort: 8766
     },
@@ -77,6 +88,12 @@ test("buildUserConfigUpdates normalizes desktop form payload into env values", (
     openaiModel: "whisper-1",
     volcengineAppKey: "app-key",
     volcengineAccessKey: "access-key",
+    qwenAsrApiKey: "sk-qwen",
+    qwenAsrModel: "qwen3-asr-flash-realtime",
+    qwenAsrLanguage: "zh",
+    qwenAsrPrompt: "",
+    qwenAsrSampleRate: "16000",
+    qwenAsrRealtimeBaseUrl: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
     transcriptDeliveryMode: "immediate",
     textInjectionMode: "type_only",
     lanSharedSecret: "",
@@ -93,6 +110,17 @@ test("buildUserConfigUpdates normalizes desktop form payload into env values", (
     OPENAI_TRANSCRIBE_MODEL: "whisper-1",
     VOLCENGINE_APP_KEY: "app-key",
     VOLCENGINE_ACCESS_KEY: "access-key",
+    WHISPER_CPP_MODEL_PATH: null,
+    WHISPER_CPP_LANGUAGE: null,
+    WHISPER_CPP_THREADS: null,
+    WHISPER_CPP_COMMAND: null,
+    WHISPER_CPP_EXTRA_ARGS: null,
+    QWEN_ASR_API_KEY: "sk-qwen",
+    QWEN_ASR_MODEL: "qwen3-asr-flash-realtime",
+    QWEN_ASR_LANGUAGE: "zh",
+    QWEN_ASR_PROMPT: null,
+    QWEN_ASR_REALTIME_BASE_URL: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    QWEN_ASR_SAMPLE_RATE: "16000",
     TRANSCRIPT_DELIVERY_MODE: "immediate",
     TEXT_INJECTION_MODE: "type_only",
     LAN_SHARED_SECRET: null,
@@ -101,6 +129,102 @@ test("buildUserConfigUpdates normalizes desktop form payload into env values", (
     CODEX_SKIP_GIT_REPO_CHECK: "1",
     CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS: null
   });
+});
+
+test("buildDesktopFormState supports whisper_cpp provider fields", () => {
+  const formState = buildDesktopFormState({
+    sendTarget: "text_injector",
+    sttProvider: "whisper_cpp",
+    whisperCppModelPath: "/models/ggml-base.bin",
+    whisperCppLanguage: "zh",
+    whisperCppThreads: 6,
+    whisperCppCommand: "whisper-cli",
+    whisperCppExtraArgs: "-fa",
+    loadedConfigFiles: [],
+    userConfigPath: "C:/Users/test/AppData/Roaming/vibecoding-plus/config.env",
+    cwdConfigPath: "D:/github/app/.env",
+    projectConfigPath: "D:/github/vibecoding-plus/.env",
+    port: 8765,
+    discoveryPort: 8766
+  });
+
+  assert.equal(formState.sttProvider, "whisper_cpp");
+  assert.equal(formState.whisperCppModelPath, "/models/ggml-base.bin");
+  assert.equal(formState.whisperCppLanguage, "zh");
+  assert.equal(formState.whisperCppThreads, "6");
+  assert.equal(formState.whisperCppCommand, "whisper-cli");
+  assert.equal(formState.whisperCppExtraArgs, "-fa");
+});
+
+test("buildDesktopFormState supports qwen_asr realtime fields", () => {
+  const formState = buildDesktopFormState({
+    sendTarget: "text_injector",
+    sttProvider: "qwen_asr",
+    qwenAsrApiKey: "sk-qwen",
+    qwenAsrModel: "qwen3-asr-flash-realtime",
+    qwenAsrLanguage: "zh",
+    qwenAsrPrompt: "只输出转写文本",
+    qwenAsrSampleRate: 16000,
+    qwenAsrRealtimeBaseUrl: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    loadedConfigFiles: [],
+    userConfigPath: "C:/Users/test/AppData/Roaming/vibecoding-plus/config.env",
+    cwdConfigPath: "D:/github/app/.env",
+    projectConfigPath: "D:/github/vibecoding-plus/.env",
+    port: 8765,
+    discoveryPort: 8766
+  });
+
+  assert.equal(formState.sttProvider, "qwen_asr");
+  assert.equal(formState.qwenAsrApiKey, "sk-qwen");
+  assert.equal(formState.qwenAsrModel, "qwen3-asr-flash-realtime");
+  assert.equal(formState.qwenAsrLanguage, "zh");
+  assert.equal(formState.qwenAsrPrompt, "只输出转写文本");
+  assert.equal(formState.qwenAsrSampleRate, "16000");
+  assert.equal(formState.qwenAsrRealtimeBaseUrl, "wss://dashscope.aliyuncs.com/api-ws/v1/realtime");
+});
+
+test("buildUserConfigUpdates maps whisper_cpp form values to env variables", () => {
+  const updates = buildUserConfigUpdates({
+    sendTarget: "text_injector",
+    sttProvider: "whisper_cpp",
+    whisperCppModelPath: "/models/ggml-base.bin",
+    whisperCppLanguage: "zh",
+    whisperCppThreads: "6",
+    whisperCppCommand: "whisper-cli",
+    whisperCppExtraArgs: "-fa",
+    transcriptDeliveryMode: "confirm_on_device",
+    textInjectionMode: "type_and_enter"
+  });
+
+  assert.equal(updates.STT_PROVIDER, "whisper_cpp");
+  assert.equal(updates.WHISPER_CPP_MODEL_PATH, "/models/ggml-base.bin");
+  assert.equal(updates.WHISPER_CPP_LANGUAGE, "zh");
+  assert.equal(updates.WHISPER_CPP_THREADS, "6");
+  assert.equal(updates.WHISPER_CPP_COMMAND, "whisper-cli");
+  assert.equal(updates.WHISPER_CPP_EXTRA_ARGS, "-fa");
+});
+
+test("buildUserConfigUpdates maps qwen_asr form values to env variables", () => {
+  const updates = buildUserConfigUpdates({
+    sendTarget: "text_injector",
+    sttProvider: "qwen_asr",
+    qwenAsrApiKey: "sk-qwen",
+    qwenAsrModel: "qwen3-asr-flash-realtime",
+    qwenAsrLanguage: "zh",
+    qwenAsrPrompt: "",
+    qwenAsrSampleRate: "16000",
+    qwenAsrRealtimeBaseUrl: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    transcriptDeliveryMode: "confirm_on_device",
+    textInjectionMode: "type_and_enter"
+  });
+
+  assert.equal(updates.STT_PROVIDER, "qwen_asr");
+  assert.equal(updates.QWEN_ASR_API_KEY, "sk-qwen");
+  assert.equal(updates.QWEN_ASR_MODEL, "qwen3-asr-flash-realtime");
+  assert.equal(updates.QWEN_ASR_LANGUAGE, "zh");
+  assert.equal(updates.QWEN_ASR_PROMPT, null);
+  assert.equal(updates.QWEN_ASR_SAMPLE_RATE, "16000");
+  assert.equal(updates.QWEN_ASR_REALTIME_BASE_URL, "wss://dashscope.aliyuncs.com/api-ws/v1/realtime");
 });
 
 test("resolveSendTarget defaults desktop mode to inject", () => {

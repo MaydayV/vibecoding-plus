@@ -34,8 +34,10 @@ void Application::Initialize() {
         display->UpdateStatusBar(true);
     }
 
+#if !CONFIG_ZECTRIX_LAN_MIC_MODE
     SetDeviceState(kDeviceStateIdle);
     board.EnterFactoryTestFlow();
+#endif
 }
 
 void Application::Run() {

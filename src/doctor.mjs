@@ -1,5 +1,4 @@
 import { createServer } from "node:net";
-
 import { isCliAvailable } from "./config.mjs";
 
 function ok(label) {
@@ -27,7 +26,29 @@ function resolveSttLabel(config) {
   if (config.mockTranscript) {
     return { label: "mock (MOCK_TRANSCRIPT set)", valid: true };
   }
-  const provider = config.sttProvider || (config.openaiApiKey ? "openai" : config.volcengineAppKey ? "volcengine" : "");
+  const provider =
+    config.sttProvider ||
+    (config.qwenAsrModel
+      ? "qwen_asr"
+      : config.whisperCppModelPath
+        ? "whisper_cpp"
+        : config.openaiApiKey
+          ? "openai"
+          : config.volcengineAppKey
+            ? "volcengine"
+            : "");
+  if (provider === "qwen_asr") {
+    if (!String(config.qwenAsrModel || "").trim()) {
+      return { label: "qwen_asr — QWEN_ASR_MODEL missing", valid: false };
+    }
+    if (!String(config.qwenAsrApiKey || "").trim()) {
+      return { label: "qwen_asr — QWEN_ASR_API_KEY missing", valid: false };
+    }
+    if (!String(config.qwenAsrRealtimeBaseUrl || "").trim()) {
+      return { label: "qwen_asr — QWEN_ASR_REALTIME_BASE_URL missing", valid: false };
+    }
+    return { label: `qwen_asr · realtime_ws · ${config.qwenAsrModel}`, valid: true };
+  }
   if (provider === "openai") {
     return config.openaiApiKey
       ? { label: `openai · ${config.openaiModel}`, valid: true }
@@ -39,7 +60,20 @@ function resolveSttLabel(config) {
       ? { label: `volcengine · ${config.volcengineLanguage}`, valid: true }
       : { label: "volcengine — VOLCENGINE_APP_KEY or VOLCENGINE_ACCESS_KEY missing", valid: false };
   }
-  return { label: "none — set OPENAI_API_KEY or VOLCENGINE_APP_KEY + VOLCENGINE_ACCESS_KEY", valid: false };
+  if (provider === "whisper_cpp") {
+    if (!config.whisperCppModelPath) {
+      return { label: "whisper_cpp — WHISPER_CPP_MODEL_PATH missing", valid: false };
+    }
+    const command = String(config.whisperCppCommand || "whisper-cli").trim() || "whisper-cli";
+    if (!isCliAvailable(command)) {
+      return { label: `whisper_cpp — command not found: ${command}`, valid: false };
+    }
+    return { label: `whisper_cpp · ${config.whisperCppLanguage}`, valid: true };
+  }
+  return {
+    label: "none — set QWEN_ASR_MODEL, OPENAI_API_KEY, VOLCENGINE_APP_KEY + VOLCENGINE_ACCESS_KEY, or WHISPER_CPP_MODEL_PATH",
+    valid: false
+  };
 }
 
 function resolveTodoIntentLabel(config) {
@@ -52,7 +86,7 @@ function resolveTodoIntentLabel(config) {
 }
 
 export async function runDoctor(config) {
-  console.log("\nvibecoding-voice doctor\n");
+  console.log("\nvibecoding-plus doctor\n");
 
   let hasError = false;
 

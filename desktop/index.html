@@ -7,7 +7,7 @@
       content="default-src 'self'; connect-src ws://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VibeCoding Voice</title>
+    <title>VibeCoding Plus</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -15,7 +15,7 @@
       <header class="hero">
         <div class="hero-copy-block">
           <p class="eyebrow">Desktop Control Center</p>
-          <h1>VibeCoding Voice</h1>
+          <h1>VibeCoding Plus</h1>
           <p class="hero-copy">
             给普通用户的桌面入口。先看状态，再按标签页分组设置，不把所有参数一次性堆在一个页面里。
           </p>
@@ -167,6 +167,8 @@
                         <select id="stt-provider" name="sttProvider">
                           <option value="volcengine">Volcengine</option>
                           <option value="openai">OpenAI</option>
+                          <option value="whisper_cpp">whisper.cpp (local)</option>
+                          <option value="qwen_asr">Qwen3-ASR (Realtime WebSocket)</option>
                         </select>
                       </label>
 
@@ -189,6 +191,56 @@
                         <label class="field">
                           <span>Volcengine Access Key</span>
                           <input id="volcengine-access-key" name="volcengineAccessKey" type="password" autocomplete="off" />
+                        </label>
+                      </div>
+
+                      <div class="provider-grid" data-provider-section="whisper_cpp">
+                        <label class="field field-full">
+                          <span>whisper.cpp 模型路径</span>
+                          <input id="whisper-cpp-model-path" name="whisperCppModelPath" type="text" placeholder="/path/to/ggml-model.bin" />
+                        </label>
+                        <label class="field">
+                          <span>识别语言</span>
+                          <input id="whisper-cpp-language" name="whisperCppLanguage" type="text" placeholder="zh" />
+                        </label>
+                        <label class="field">
+                          <span>线程数</span>
+                          <input id="whisper-cpp-threads" name="whisperCppThreads" type="number" min="1" step="1" placeholder="4" />
+                        </label>
+                        <label class="field">
+                          <span>命令</span>
+                          <input id="whisper-cpp-command" name="whisperCppCommand" type="text" placeholder="whisper-cli" />
+                        </label>
+                        <label class="field field-full">
+                          <span>额外参数（可选）</span>
+                          <input id="whisper-cpp-extra-args" name="whisperCppExtraArgs" type="text" placeholder="例如：-fa -np" />
+                        </label>
+                      </div>
+
+                      <div class="provider-grid" data-provider-section="qwen_asr">
+                        <label class="field">
+                          <span>Qwen API Key</span>
+                          <input id="qwen-asr-api-key" name="qwenAsrApiKey" type="password" autocomplete="off" />
+                        </label>
+                        <label class="field">
+                          <span>Qwen 模型</span>
+                          <input id="qwen-asr-model" name="qwenAsrModel" type="text" placeholder="qwen3-asr-flash-realtime" />
+                        </label>
+                        <label class="field">
+                          <span>识别语言</span>
+                          <input id="qwen-asr-language" name="qwenAsrLanguage" type="text" placeholder="zh" />
+                        </label>
+                        <label class="field">
+                          <span>采样率</span>
+                          <input id="qwen-asr-sample-rate" name="qwenAsrSampleRate" type="number" min="8000" step="1" placeholder="16000" />
+                        </label>
+                        <label class="field field-full">
+                          <span>识别提示词（可选）</span>
+                          <input id="qwen-asr-prompt" name="qwenAsrPrompt" type="text" placeholder="例如：只输出中文转写文本" />
+                        </label>
+                        <label class="field field-full">
+                          <span>Realtime WebSocket Base URL</span>
+                          <input id="qwen-asr-realtime-base-url" name="qwenAsrRealtimeBaseUrl" type="text" placeholder="wss://dashscope.aliyuncs.com/api-ws/v1/realtime" />
                         </label>
                       </div>
 
