@@ -1,6 +1,9 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
+
 
 import { WebSocketServer, WebSocket } from "ws";
 
@@ -41,9 +44,17 @@ const LOCALHOST_REMOTE_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.
 const TODO_PENDING_INTENTS_PATH = path.join(path.dirname(getUserTodoListPath()), "todo-pending-intents.json");
 const PCM_SAMPLE_RATE = 16000;
 const PCM_BYTES_PER_SAMPLE = 2;
+const DISPLAY_REPO_NAME = "vibecoding-plus";
 
 let cliDispatchLock = Promise.resolve();
 let cliLogTailFlushTimer = null;
+let terminalMirrorPollTimer = null;
+let terminalMirrorLastSnapshot = "";
+let terminalMirrorLastError = "";
+let terminalMirrorPaneTargetsCache = {
+  expiresAt: 0,
+  targets: []
+};
 const pendingTodoIntentByDevice = loadPendingTodoIntentByDevice();
 
 function loadPendingTodoIntentByDevice() {
@@ -164,6 +175,499 @@ function scheduleCliLogTailFlush() {
     });
   }, delayMs);
   cliLogTailFlushTimer.unref?.();
+}
+
+
+const CLAUDE_PROJECT_TRANSCRIPTS_DIR = path.join(
+  os.homedir(),
+  ".claude",
+  "projects",
+  "-Users-colin-Dev-vibecoding-voice"
+);
+const CLAUDE_TRANSCRIPT_MAX_AGE_MS = 30 * 60 * 1000;
+
+function parseTerminalMirrorTargets(rawValue) {
+  const text = String(rawValue || "").trim();
+  if (!text) {
+    return [];
+  }
+  return text
+    .split(",")
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .map((target) => {
+      const separatorIndex = target.lastIndexOf(":");
+      if (separatorIndex <= 0 || separatorIndex === target.length - 1) {
+        return null;
+      }
+      const session = target.slice(0, separatorIndex).trim();
+      const window = target.slice(separatorIndex + 1).trim();
+      if (!session || !window) {
+        return null;
+      }
+      return { session, window };
+    })
+    .filter(Boolean);
+}
+
+function shouldUseTmuxMirror() {
+  return Boolean(
+    parseTerminalMirrorTargets(config.terminalMirrorTargets).length > 0 ||
+      (config.terminalMirrorSession && config.terminalMirrorWindow)
+  );
+}
+
+function getLatestClaudeTranscriptFile() {
+  if (!fs.existsSync(CLAUDE_PROJECT_TRANSCRIPTS_DIR)) {
+    return "";
+  }
+
+  const candidates = fs
+    .readdirSync(CLAUDE_PROJECT_TRANSCRIPTS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .map((entry) => path.join(CLAUDE_PROJECT_TRANSCRIPTS_DIR, entry.name));
+
+  if (candidates.length === 0) {
+    return "";
+  }
+
+  candidates.sort((left, right) => {
+    const leftMtime = fs.statSync(left).mtimeMs;
+    const rightMtime = fs.statSync(right).mtimeMs;
+    return rightMtime - leftMtime;
+  });
+
+  const newest = candidates[0];
+  const ageMs = Date.now() - fs.statSync(newest).mtimeMs;
+  if (ageMs > CLAUDE_TRANSCRIPT_MAX_AGE_MS) {
+    return "";
+  }
+  return newest;
+}
+
+function extractTextFromClaudeMessageContent(content) {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const pieces = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    if (block.type === "text" && block.text) {
+      pieces.push(String(block.text));
+    }
+    if (block.type === "tool_result" && typeof block.content === "string") {
+      pieces.push(String(block.content));
+    }
+  }
+  return pieces.join("\n").trim();
+}
+
+function readClaudeTranscriptSnapshot() {
+  const transcriptPath = getLatestClaudeTranscriptFile();
+  if (!transcriptPath) {
+    return { text: "", userText: "", statusLine: "Claude mirror unavailable" };
+  }
+
+  const raw = fs.readFileSync(transcriptPath, "utf8");
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  const recent = lines.slice(-200);
+
+  let latestUserText = "";
+  let latestAssistantText = "";
+  const tailLines = [];
+
+  for (const line of recent) {
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (event.type === "user") {
+      const text = extractTextFromClaudeMessageContent(event?.message?.content);
+      if (text) {
+        latestUserText = text;
+        tailLines.push(`user: ${text}`);
+      }
+      continue;
+    }
+
+    if (event.type === "assistant") {
+      const text = extractTextFromClaudeMessageContent(event?.message?.content);
+      if (text) {
+        latestAssistantText = text;
+        tailLines.push(`assistant: ${text}`);
+      }
+    }
+  }
+
+  const snapshotText = tailLines.slice(-Math.max(8, Number(config.terminalMirrorLines) || 60)).join("\n");
+  return {
+    text: snapshotText,
+    userText: latestUserText,
+    assistantText: latestAssistantText,
+    statusLine: `Claude mirror ${path.basename(transcriptPath)}`
+  };
+}
+
+function getTerminalMirrorPaneTargets() {
+  const now = Date.now();
+  if (terminalMirrorPaneTargetsCache.expiresAt > now && terminalMirrorPaneTargetsCache.targets.length > 0) {
+    return terminalMirrorPaneTargetsCache.targets;
+  }
+
+  const targets = [];
+  const pushTarget = (session, window) => {
+    const normalizedSession = String(session || "").trim();
+    const normalizedWindow = String(window || "").trim();
+    if (!normalizedSession || !normalizedWindow) {
+      return;
+    }
+    const exists = targets.some((item) => item.session === normalizedSession && item.window === normalizedWindow);
+    if (!exists) {
+      targets.push({ session: normalizedSession, window: normalizedWindow });
+    }
+  };
+
+  const configuredTargets = parseTerminalMirrorTargets(config.terminalMirrorTargets);
+  for (const item of configuredTargets) {
+    pushTarget(item.session, item.window);
+  }
+
+  pushTarget(config.terminalMirrorSession, config.terminalMirrorWindow);
+
+  let activeSession = "";
+  let activeWindow = "";
+  try {
+    activeSession = String(
+      execFileSync("tmux", ["display-message", "-p", "#{session_name}"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      })
+    ).trim();
+    activeWindow = String(
+      execFileSync("tmux", ["display-message", "-p", "#{window_name}"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      })
+    ).trim();
+  } catch {
+    // ignore
+  }
+
+  pushTarget(activeSession, activeWindow);
+
+  try {
+    const listOutput = String(
+      execFileSync("tmux", ["list-windows", "-a", "-F", "#{session_name}:#{window_name}"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      })
+    );
+    for (const line of listOutput.split(/\r?\n/)) {
+      const pair = String(line || "").trim();
+      if (!pair) {
+        continue;
+      }
+      const separatorIndex = pair.lastIndexOf(":");
+      if (separatorIndex <= 0 || separatorIndex === pair.length - 1) {
+        continue;
+      }
+      const session = pair.slice(0, separatorIndex).trim();
+      const window = pair.slice(separatorIndex + 1).trim();
+      pushTarget(session, window);
+    }
+  } catch {
+    // ignore
+  }
+
+  terminalMirrorPaneTargetsCache = {
+    expiresAt: now + 60_000,
+    targets
+  };
+  return terminalMirrorPaneTargetsCache.targets;
+}
+
+
+function readTmuxPaneLines(session, window, lines) {
+  return String(
+    execFileSync(
+      "tmux",
+      [
+        "capture-pane",
+        "-pt",
+        `${session}:${window}`,
+        "-S",
+        `-${Math.max(20, Math.min(400, Number(lines) || 60))}`,
+        "-J"
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      }
+    ) || ""
+  );
+}
+
+function normalizeTerminalSnapshot(text) {
+  return String(text || "")
+    .replace(/\u001b\[[0-9;]*[A-Za-z]/g, "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function extractLatestTerminalUserPrompt(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (/^(?:you|用户|我)\s*[:：]\s+/iu.test(line)) {
+      return line.replace(/^(?:you|用户|我)\s*[:：]\s+/iu, "").trim();
+    }
+    if (/^user\s*[:：]\s+/iu.test(line)) {
+      return line.replace(/^user\s*[:：]\s+/iu, "").trim();
+    }
+  }
+
+  return "";
+}
+
+function extractLatestTerminalAssistantReply(text) {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => String(line || "").trim())
+    .filter(Boolean);
+
+  const assistantMarkers = [
+    /^assistant\s*[:：]\s+/iu,
+    /^claude\s*[:：]\s+/iu,
+    /^回复\s*[:：]\s+/iu
+  ];
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    for (const marker of assistantMarkers) {
+      if (marker.test(line)) {
+        return line.replace(marker, "").trim();
+      }
+    }
+  }
+
+  const tail = lines.slice(-8).join("\n").trim();
+  return summarizeAssistantText(tail);
+}
+
+function updateCliSummaryFromTerminalSnapshot(snapshot, sourceTarget) {
+  const normalized = normalizeTerminalSnapshot(snapshot);
+  if (!normalized || normalized === terminalMirrorLastSnapshot) {
+    return;
+  }
+
+  terminalMirrorLastSnapshot = normalized;
+  const userText = extractLatestTerminalUserPrompt(normalized);
+  const assistantText = extractLatestTerminalAssistantReply(normalized);
+
+  if (userText) {
+    cliView.latestUserText = summarizeAssistantText(userText);
+  }
+  if (assistantText) {
+    cliView.latestAssistantText = summarizeAssistantText(assistantText);
+  }
+  cliView.statusLine = sourceTarget ? `${sourceTarget} mirror` : "Terminal mirror";
+
+  const mirrorLines = normalized
+    .split("\n")
+    .slice(-Math.max(8, Number(config.terminalMirrorLines) || 60));
+
+  for (const line of mirrorLines) {
+    cliView.logLines = pushLogLine(cliView.logLines, line);
+  }
+
+  broadcastCliSummary();
+  broadcastCliLogTail();
+
+  const options = extractPlanOptions(normalized);
+  if (options.length === 0) {
+    return;
+  }
+  const signature = options.join("\n");
+
+  for (const client of wss.clients) {
+    if (client.readyState !== WebSocket.OPEN || !client.clientState?.authenticated) {
+      continue;
+    }
+    if (client.clientState.lastMirrorPlanSignature === signature) {
+      continue;
+    }
+    client.clientState.lastMirrorPlanSignature = signature;
+    applyPlanOptions(client, client.clientState, options);
+  }
+}
+
+function updateCliSummaryFromTranscriptSnapshot(snapshot) {
+  const userText = summarizeAssistantText(snapshot?.userText || "");
+  const assistantText = summarizeAssistantText(snapshot?.assistantText || "");
+  const statusLine = String(snapshot?.statusLine || "Claude mirror").trim();
+  const normalized = normalizeTerminalSnapshot(snapshot?.text || "");
+
+  const signature = [userText, assistantText, normalized].join("\n---\n");
+  if (!signature.trim() || signature === terminalMirrorLastSnapshot) {
+    return;
+  }
+  terminalMirrorLastSnapshot = signature;
+
+  if (userText) {
+    cliView.latestUserText = userText;
+  }
+  if (assistantText) {
+    cliView.latestAssistantText = assistantText;
+  }
+  cliView.statusLine = statusLine;
+
+  if (normalized) {
+    const lines = normalized
+      .split("\n")
+      .slice(-Math.max(8, Number(config.terminalMirrorLines) || 60));
+    for (const line of lines) {
+      cliView.logLines = pushLogLine(cliView.logLines, line);
+    }
+  }
+
+  broadcastCliSummary();
+  broadcastCliLogTail();
+
+  const optionsSource = assistantText || normalized;
+  const options = extractPlanOptions(optionsSource);
+  if (options.length === 0) {
+    return;
+  }
+  const planSignature = options.join("\n");
+  for (const client of wss.clients) {
+    if (client.readyState !== WebSocket.OPEN || !client.clientState?.authenticated) {
+      continue;
+    }
+    if (client.clientState.lastMirrorPlanSignature === planSignature) {
+      continue;
+    }
+    client.clientState.lastMirrorPlanSignature = planSignature;
+    applyPlanOptions(client, client.clientState, options);
+  }
+}
+function pollTerminalMirrorOnce() {
+  if (!config.terminalMirrorEnabled || config.sendTarget !== "text_injector") {
+    return;
+  }
+
+  if (!shouldUseTmuxMirror()) {
+    try {
+      const snapshot = readClaudeTranscriptSnapshot();
+      if (!snapshot.text && !snapshot.assistantText) {
+        if (terminalMirrorLastError !== "no_claude_transcript") {
+          terminalMirrorLastError = "no_claude_transcript";
+          setCliState({ phase: "idle", statusLine: snapshot.statusLine || "Claude mirror unavailable" });
+        }
+        return;
+      }
+
+      terminalMirrorLastError = "";
+      cliView.cwd = config.claudeCwd || process.cwd();
+      cliView.repoName = DISPLAY_REPO_NAME;
+      setCliState({
+        phase: "running",
+        statusLine: snapshot.statusLine || "Claude mirror",
+        threadId: ""
+      });
+      updateCliSummaryFromTranscriptSnapshot(snapshot);
+      return;
+    } catch {
+      if (terminalMirrorLastError !== "transcript_failed") {
+        terminalMirrorLastError = "transcript_failed";
+        setCliState({ phase: "idle", statusLine: "Claude mirror polling failed" });
+      }
+      return;
+    }
+  }
+
+  try {
+    const targets = getTerminalMirrorPaneTargets();
+    if (targets.length === 0) {
+      if (terminalMirrorLastError !== "no_tmux_target") {
+        terminalMirrorLastError = "no_tmux_target";
+        setCliState({ phase: "idle", statusLine: "Terminal mirror unavailable" });
+      }
+      return;
+    }
+
+    let captured = "";
+    let matchedTarget = null;
+    for (const target of targets) {
+      try {
+        captured = readTmuxPaneLines(target.session, target.window, config.terminalMirrorLines);
+      } catch {
+        continue;
+      }
+      if (captured && captured.trim()) {
+        matchedTarget = target;
+        break;
+      }
+    }
+
+    if (!matchedTarget) {
+      if (terminalMirrorLastError !== "capture_failed") {
+        terminalMirrorLastError = "capture_failed";
+        setCliState({ phase: "idle", statusLine: "Terminal mirror waiting for tmux output" });
+      }
+      return;
+    }
+
+    terminalMirrorLastError = "";
+    cliView.cwd = config.codexCwd;
+    cliView.repoName = DISPLAY_REPO_NAME;
+    setCliState({
+      phase: "running",
+      statusLine: `Terminal mirror ${matchedTarget.session}:${matchedTarget.window}`,
+      threadId: ""
+    });
+    updateCliSummaryFromTerminalSnapshot(captured, "Ghostty");
+  } catch {
+    if (terminalMirrorLastError !== "poll_failed") {
+      terminalMirrorLastError = "poll_failed";
+      setCliState({ phase: "idle", statusLine: "Terminal mirror polling failed" });
+    }
+  }
+}
+
+function restartTerminalMirrorPolling() {
+  if (terminalMirrorPollTimer) {
+    clearInterval(terminalMirrorPollTimer);
+    terminalMirrorPollTimer = null;
+  }
+
+  terminalMirrorLastSnapshot = "";
+  terminalMirrorLastError = "";
+  terminalMirrorPaneTargetsCache = { expiresAt: 0, targets: [] };
+
+  if (!(config.terminalMirrorEnabled && config.sendTarget === "text_injector")) {
+    return;
+  }
+
+  const intervalMs = Math.max(300, Number(config.terminalMirrorIntervalMs) || 800);
+  terminalMirrorPollTimer = setInterval(() => {
+    pollTerminalMirrorOnce();
+  }, intervalMs);
+  terminalMirrorPollTimer.unref?.();
+
+  pollTerminalMirrorOnce();
 }
 
 function extractJsonObjectsFromText(text) {
@@ -448,7 +952,7 @@ function printBanner() {
     ? "\x1b[32mon\x1b[0m"
     : "\x1b[33moff\x1b[0m (set LAN_SHARED_SECRET to enable)";
 
-  console.log(`\nvibecoding-voice v${version}`);
+  console.log(`\nvibecoding-plus v${version}`);
   console.log(`  target     ${targetLabel}`);
   console.log(`  stt        ${sttLabel}`);
   console.log(`  todo       ${todoAssistant.label()}`);
@@ -505,11 +1009,12 @@ function applySendTarget(nextTarget) {
   const label = getTargetLabel(nextTarget);
   const cwd = getTargetCwd(nextTarget);
   cliView.cwd = cwd;
-  cliView.repoName = path.basename(cwd);
+  cliView.repoName = DISPLAY_REPO_NAME;
   if (!cliView.latestAssistantText) {
     cliView.statusLine = label ? `${label} idle` : "Idle";
   }
 
+  restartTerminalMirrorPolling();
   broadcastCliState();
   broadcastCliSummary();
   broadcastServerReady();
@@ -531,7 +1036,7 @@ function applyCliCwd(target, nextCwd) {
 
   if (config.sendTarget === target) {
     cliView.cwd = resolvedCwd;
-    cliView.repoName = path.basename(resolvedCwd);
+    cliView.repoName = DISPLAY_REPO_NAME;
     if (cliView.phase === "idle") {
       const label = getTargetLabel(target);
       cliView.statusLine = label ? `${label} idle` : "Idle";
@@ -727,7 +1232,8 @@ function createClientState() {
     pendingTodoIntentExpiresAt: 0,
     pendingTodoTimer: null,
     planOptions: [],
-    planSelectedIndex: -1
+    planSelectedIndex: -1,
+    lastMirrorPlanSignature: ""
   };
 }
 
@@ -1146,9 +1652,16 @@ async function dispatchPrompt(prompt, options = {}) {
       return;
     }
 
+    cliView.latestUserText = prompt;
+    cliView.statusLine = config.terminalMirrorEnabled ? "Typed to terminal (mirror on)" : "Typed to terminal";
+    broadcastCliSummary();
+    broadcastCliState();
     await injectText(prompt, config.textInjectionMode, {
       dryRun: config.dryRunTextInjection
     });
+    if (config.terminalMirrorEnabled) {
+      pollTerminalMirrorOnce();
+    }
   });
 }
 
@@ -1562,12 +2075,17 @@ wss.on("connection", (ws, req) => {
 
 server.listen(config.port, config.bindHost, () => {
   printBanner();
+  restartTerminalMirrorPolling();
   log(`server ready`);
 });
 
 function shutdown() {
   log("shutting down");
   clearInterval(keepaliveInterval);
+  if (terminalMirrorPollTimer) {
+    clearInterval(terminalMirrorPollTimer);
+    terminalMirrorPollTimer = null;
+  }
   discoveryServer?.close();
   for (const client of wss.clients) {
     client.terminate();

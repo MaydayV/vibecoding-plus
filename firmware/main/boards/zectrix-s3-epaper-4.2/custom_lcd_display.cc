@@ -410,7 +410,8 @@ void CustomLcdDisplay::refresh_task_loop() {
     const TickType_t kDebounceTicks = pdMS_TO_TICKS(50);
     const TickType_t kUrgentDebounceTicks = pdMS_TO_TICKS(30);
     const float kMinDiffBitRatio = 0.001f;  // 0.1%
-    const float kForceFullDiffRatio = 0.30f;  // 30%
+    const float kForceFullDiffRatio = 0.20f;  // 20%
+    const int kMaxPartialBeforeFull = 4;
     const int kTinyMaxStreak = 4;
     const size_t kTinyMaxAccumBits = 64 * 8;
     const TickType_t kTinyMaxHoldTicks = pdMS_TO_TICKS(1200);
@@ -567,9 +568,9 @@ void CustomLcdDisplay::refresh_task_loop() {
         }
         if (!should_full && result.diff_ratio >= kForceFullDiffRatio) {
             should_full = true;
-            ESP_LOGI(TAG, "[STRATEGY] diff_ratio>=30%% -> FULL");
+            ESP_LOGI(TAG, "[STRATEGY] diff_ratio>=20%% -> FULL");
         }
-        if (!should_full && partial_since_full >= 10) {
+        if (!should_full && partial_since_full >= kMaxPartialBeforeFull) {
             should_full = true;
         }
 

@@ -1393,15 +1393,21 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
         cJSON* quota_week = cJSON_GetObjectItemCaseSensitive(root, "quotaWeekRemainingPct");
         if (phase != nullptr) {
             const bool was_running = (phase_ == Phase::Running);
+            const bool recording_or_transcribing =
+                (phase_ == Phase::Recording) || (phase_ == Phase::Transcribing);
             cli_phase_text_ = phase;
             if (strcmp(phase, "running") == 0) {
-                phase_ = Phase::Running;
-                active_page_ = Page::Summary;
+                if (!recording_or_transcribing) {
+                    phase_ = Phase::Running;
+                    active_page_ = PageForCurrentVoiceMode();
+                }
             } else if (strcmp(phase, "error") == 0) {
-                phase_ = Phase::Error;
-                active_page_ = Page::Summary;
-                PlayBeep(300, 300);  // 出错：低沉长音
-            } else if (!has_pending_transcript_) {
+                if (!recording_or_transcribing) {
+                    phase_ = Phase::Error;
+                    active_page_ = PageForCurrentVoiceMode();
+                    PlayBeep(300, 300);  // 出错：低沉长音
+                }
+            } else if (!has_pending_transcript_ && !recording_or_transcribing) {
                 phase_ = Phase::Idle;
                 ShowIdleTodoPage();
                 if (was_running) {
@@ -1444,7 +1450,7 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
             repo_name_ = repo_name;
         }
         if (phase_ == Phase::Running) {
-            active_page_ = Page::Summary;
+            active_page_ = PageForCurrentVoiceMode();
         }
     } else if (strcmp(type, "cli_log_tail") == 0) {
         cJSON* lines = cJSON_GetObjectItemCaseSensitive(root, "lines");
@@ -1936,7 +1942,7 @@ std::string LanMicApp::GetTodoMenuItemLabel(int item) const {
         case 1:
             return "删除当前项";
         case 2:
-            return "切换到实时";
+            return "切换到编程";
         case 3:
             return "重新连接主机";
         case 4:
@@ -2060,7 +2066,7 @@ void LanMicApp::ExecuteTodoMenuItem(int item) {
             SwitchPage(Page::Summary);
             if (!online) {
                 pending_normal_after_reconnect_ = true;
-                RequestReconnect("正在重连实时模式...");
+                RequestReconnect("正在重连编程模式...");
             }
             return;
         case 3:
@@ -2243,7 +2249,7 @@ const char* LanMicApp::GetToolLabel() const {
 }
 
 const char* LanMicApp::GetModeLabel() const {
-    return (active_page_ == Page::Todo || offline_todo_mode_) ? "模式: 待办" : "模式: 实时";
+    return (active_page_ == Page::Todo || offline_todo_mode_) ? "模式: 待办" : "模式: 编程";
 }
 
 std::string LanMicApp::GetPhaseLabel() const {
@@ -2300,7 +2306,7 @@ std::string LanMicApp::GetFooterText() const {
         if (!plan_options_.empty()) {
             return "UP/DN 选方案 | BOOT 应用";
         }
-        return "长按UP菜单 | 长按实时语音";
+        return "长按UP菜单 | 长按编程语音";
     }
     if (active_page_ == Page::Todo) {
         return IsServerConnected()
@@ -2347,7 +2353,7 @@ std::string LanMicApp::BuildPromptBody() const {
         case NetworkState::Server:
             return active_page_ == Page::Todo
                 ? "待办语音模式\n长按UP打开菜单"
-                : "实时编程模式\n长按UP打开菜单";
+                : "编程模式\n长按UP打开菜单";
         case NetworkState::Wifi:
             return "正在查找服务器...";
         case NetworkState::Config:
@@ -2513,13 +2519,13 @@ void LanMicApp::UpdateDisplay() {
     }
 
     texts.push_back({GetNetworkLabel(), 28, 9, 16});
-    texts.push_back({(render_page == Page::Todo || render_offline_todo_mode) ? "待办" : "实时", 96, 9, 16});
+    texts.push_back({(render_page == Page::Todo || render_offline_todo_mode) ? "待办" : "编程", 96, 9, 16});
     texts.push_back({GetPhaseLabel(), 166, 9, 16});
     if (!quota_status_text.empty()) {
         texts.push_back({quota_status_text, 250, 9, 16});
     }
     texts.push_back({battery_text, 346, 9, 16});
-    const char* page_label = render_page == Page::Summary ? "实时"
+    const char* page_label = render_page == Page::Summary ? "编程"
                            : render_page == Page::Todo    ? "待办"
                            : render_page == Page::Log     ? "日志"
                            :                               "设置";
@@ -2528,7 +2534,7 @@ void LanMicApp::UpdateDisplay() {
 
     if (render_page == Page::Summary) {
         if (todo_menu_open_ && todo_menu_kind_ == TodoMenuKind::Live) {
-            texts.push_back({"实时菜单", 12, kPromptTitleY, 16});
+            texts.push_back({"编程菜单", 12, kPromptTitleY, 16});
             texts.push_back({single_line(GetModeLabel(), 16), 228, kPromptTitleY, 16});
             std::vector<std::string> rows;
             const int count = GetTodoMenuItemCount();
@@ -3109,10 +3115,17 @@ void LanMicApp::Run() {
             }
             const bool can_open_page_menu =
                 phase_ == Phase::Idle || phase_ == Phase::Error;
-            const bool defer_page_press =
-                (active_page_ == Page::Todo || active_page_ == Page::Summary) &&
+            const bool defer_normal_short_enter_press =
                 !has_pending_transcript_ &&
-                can_open_page_menu;
+                IsServerConnected() &&
+                send_target_ == "text_injector" &&
+                voice_mode_ == VoiceMode::Normal &&
+                (phase_ == Phase::Idle || phase_ == Phase::Running);
+            const bool defer_page_press =
+                defer_normal_short_enter_press ||
+                (active_page_ == Page::Todo &&
+                 !has_pending_transcript_ &&
+                 can_open_page_menu);
             if (defer_page_press) {
                 last_pressed = true;
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -3148,7 +3161,7 @@ void LanMicApp::Run() {
             !todo_hold_started &&
             boot_pressed_since_ms > 0 &&
             !has_pending_transcript_ &&
-            (phase_ == Phase::Idle || phase_ == Phase::Error) &&
+            (phase_ == Phase::Idle || phase_ == Phase::Error || phase_ == Phase::Running) &&
             IsServerConnected() &&
             (now_ms - boot_pressed_since_ms) >= kTodoBootHoldMs) {
             if (!SyncVoiceModeToActivePage()) {
@@ -3178,13 +3191,13 @@ void LanMicApp::Run() {
                 phase_ = Phase::Transcribing;
                 status_text_ = "转写中";
                 UpdateDisplay();
-            } else if (active_page_ == Page::Summary &&
-                       !todo_hold_started &&
+            } else if (!todo_hold_started &&
                        boot_pressed_since_ms > 0 &&
                        !has_pending_transcript_ &&
-                       phase_ == Phase::Idle &&
+                       (phase_ == Phase::Idle || phase_ == Phase::Running) &&
                        IsServerConnected() &&
-                       send_target_ == "text_injector") {
+                       send_target_ == "text_injector" &&
+                       voice_mode_ == VoiceMode::Normal) {
                 if (SendEnter()) {
                     status_text_ = "已发送回车";
                     hint_text_ = "短按 BOOT 回车";

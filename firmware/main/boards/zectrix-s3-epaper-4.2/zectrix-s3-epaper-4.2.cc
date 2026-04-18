@@ -193,6 +193,7 @@ public:
     }
 
     bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+        charge_status_.Tick(GetNowMs());
         ChargeStatus::Snapshot snapshot = charge_status_.Get();
         charging = snapshot.charging;
         discharging = !snapshot.power_present;
@@ -449,12 +450,54 @@ private:
             return false;
         }
 
-        int computed_percent =
-            (-1 * average_voltage * average_voltage + 9016 * average_voltage - 19189000) / 10000;
+        static bool has_filtered_voltage = false;
+        static int filtered_voltage_mv = 0;
+        if (!has_filtered_voltage) {
+            filtered_voltage_mv = average_voltage;
+            has_filtered_voltage = true;
+        } else {
+            filtered_voltage_mv = (filtered_voltage_mv * 7 + average_voltage * 3) / 10;
+        }
+
+        int computed_percent = 0;
+        const int v = filtered_voltage_mv;
+        if (v <= 3300) {
+            computed_percent = 0;
+        } else if (v >= 4200) {
+            computed_percent = 100;
+        } else if (v <= 3600) {
+            computed_percent = (v - 3300) * 20 / 300;
+        } else if (v <= 3700) {
+            computed_percent = 20 + (v - 3600) * 20 / 100;
+        } else if (v <= 3800) {
+            computed_percent = 40 + (v - 3700) * 20 / 100;
+        } else if (v <= 3900) {
+            computed_percent = 60 + (v - 3800) * 15 / 100;
+        } else if (v <= 4000) {
+            computed_percent = 75 + (v - 3900) * 13 / 100;
+        } else if (v <= 4100) {
+            computed_percent = 88 + (v - 4000) * 8 / 100;
+        } else {
+            computed_percent = 96 + (v - 4100) * 4 / 100;
+        }
+
         computed_percent = computed_percent > 100 ? 100 : (computed_percent < 0 ? 0 : computed_percent);
 
-        voltage_mv = static_cast<uint16_t>(average_voltage);
-        percent = static_cast<uint8_t>(computed_percent);
+        static bool has_last_percent = false;
+        static int last_percent = 0;
+        if (!has_last_percent) {
+            last_percent = computed_percent;
+            has_last_percent = true;
+        } else if (computed_percent > last_percent + 2) {
+            last_percent += 2;
+        } else if (computed_percent < last_percent - 2) {
+            last_percent -= 2;
+        } else {
+            last_percent = computed_percent;
+        }
+
+        voltage_mv = static_cast<uint16_t>(filtered_voltage_mv);
+        percent = static_cast<uint8_t>(last_percent);
         return true;
     }
 
