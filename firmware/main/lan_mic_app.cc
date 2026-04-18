@@ -62,7 +62,7 @@ constexpr EventBits_t kWifiConnectedBit = BIT0;
 constexpr int kFrameDurationMs = 20;
 constexpr int kSampleRate = 16000;
 constexpr int kFrameSamples = kSampleRate * kFrameDurationMs / 1000;
-constexpr size_t kPrerollFrameCount = 30;      // 600 ms @ 20 ms per frame
+constexpr size_t kPrerollFrameCount = 45;      // 900 ms @ 20 ms per frame
 constexpr int kDiscoveryAttempts = 3;
 constexpr int kDiscoveryTimeoutMs = 600;
 constexpr int kDiscoveryRetryDelayMs = 150;
@@ -308,6 +308,15 @@ bool LanMicApp::Initialize() {
             case NetworkEvent::WifiConfigModeExit:
                 ESP_LOGI(kTag, "WiFi config mode exited");
                 network_state_ = NetworkState::Offline;
+                if (SsidManager::GetInstance().GetSsidList().empty()) {
+                    ESP_LOGW(kTag, "WiFi config mode exited without saved credentials; skip reboot");
+                    status_text_ = "Wi‑Fi 配网模式";
+                    hint_text_ = "未检测到已保存网络";
+                    active_page_ = Page::Summary;
+                    summary_scroll_offset_ = 0;
+                    UpdateDisplay();
+                    break;
+                }
                 RequestWifiReconfigureByReboot("重启中...", "正在应用 Wi‑Fi 配置");
                 break;
             default:
@@ -1432,13 +1441,9 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
             quota_week_remaining_pct_ = quota_week->valueint;
         }
     } else if (strcmp(type, "cli_summary") == 0) {
-        const char* latest_user = GetJsonString(root, "latestUserText");
         const char* latest_assistant = GetJsonString(root, "latestAssistantText");
         const char* status_line = GetJsonString(root, "statusLine");
         const char* repo_name = GetJsonString(root, "repoName");
-        if (latest_user != nullptr) {
-            transcript_text_ = latest_user;
-        }
         if (latest_assistant != nullptr) {
             latest_assistant_text_ = latest_assistant;
             summary_scroll_offset_ = 0;
@@ -2825,7 +2830,7 @@ void LanMicApp::Run() {
             !todo_menu_open_ &&
             !has_pending_transcript_ &&
             (active_page_ == Page::Todo || active_page_ == Page::Summary) &&
-            (phase_ == Phase::Idle || phase_ == Phase::Error)) {
+            (phase_ == Phase::Idle || phase_ == Phase::Error || phase_ == Phase::Running)) {
             SwitchPage(active_page_ == Page::Todo ? Page::Summary : Page::Todo);
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
@@ -3224,6 +3229,14 @@ void LanMicApp::Run() {
         if (pressed) {
             if (phase_ == Phase::Recording) {
                 StreamAudioFrame();
+                continue;
+            }
+
+            if (IsServerConnected() &&
+                !has_pending_transcript_ &&
+                (active_page_ == Page::Todo || active_page_ == Page::Summary)) {
+                CapturePrerollFrame();
+                vTaskDelay(pdMS_TO_TICKS(1));
             } else {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }

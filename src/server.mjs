@@ -178,11 +178,17 @@ function scheduleCliLogTailFlush() {
 }
 
 
+function toClaudeProjectSlug(cwdPath) {
+  const resolved = path.resolve(String(cwdPath || process.cwd()));
+  const slug = resolved.replace(/[\\/]+/g, "-");
+  return slug.startsWith("-") ? slug : `-${slug}`;
+}
+
 const CLAUDE_PROJECT_TRANSCRIPTS_DIR = path.join(
   os.homedir(),
   ".claude",
   "projects",
-  "-Users-colin-Dev-vibecoding-voice"
+  toClaudeProjectSlug(config.claudeCwd || process.cwd())
 );
 const CLAUDE_TRANSCRIPT_MAX_AGE_MS = 30 * 60 * 1000;
 
@@ -564,7 +570,7 @@ function updateCliSummaryFromTranscriptSnapshot(snapshot) {
   }
 }
 function pollTerminalMirrorOnce() {
-  if (!config.terminalMirrorEnabled || config.sendTarget !== "text_injector") {
+  if (!config.terminalMirrorEnabled) {
     return;
   }
 
@@ -657,7 +663,7 @@ function restartTerminalMirrorPolling() {
   terminalMirrorLastError = "";
   terminalMirrorPaneTargetsCache = { expiresAt: 0, targets: [] };
 
-  if (!(config.terminalMirrorEnabled && config.sendTarget === "text_injector")) {
+  if (!config.terminalMirrorEnabled) {
     return;
   }
 

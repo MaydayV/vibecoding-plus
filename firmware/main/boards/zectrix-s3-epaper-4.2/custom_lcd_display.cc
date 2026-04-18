@@ -410,8 +410,8 @@ void CustomLcdDisplay::refresh_task_loop() {
     const TickType_t kDebounceTicks = pdMS_TO_TICKS(50);
     const TickType_t kUrgentDebounceTicks = pdMS_TO_TICKS(30);
     const float kMinDiffBitRatio = 0.001f;  // 0.1%
-    const float kForceFullDiffRatio = 0.20f;  // 20%
-    const int kMaxPartialBeforeFull = 4;
+    const float kForceFullDiffRatio = 0.12f;  // 12%
+    const int kMaxPartialBeforeFull = 1;
     const int kTinyMaxStreak = 4;
     const size_t kTinyMaxAccumBits = 64 * 8;
     const TickType_t kTinyMaxHoldTicks = pdMS_TO_TICKS(1200);
@@ -859,11 +859,12 @@ static inline void pack_1bpp_to_2683(uint8_t in, uint8_t& out0, uint8_t& out1)
 
     for (uint8_t i = 0; i < 8; i++) {
         uint8_t bit = (in >> (7 - i)) & 0x01;
+        uint8_t pair = bit ? 0x03 : 0x00;
 
         if (i < 4) {
-            b0 |= bit << (8 - 2 * (i + 1));   // i=0..3 -> shift 6,4,2,0
+            b0 |= (uint8_t)(pair << (6 - 2 * i));
         } else {
-            b1 |= bit << (14 - 2 * i);        // i=4..7 -> shift 6,4,2,0
+            b1 |= (uint8_t)(pair << (6 - 2 * (i - 4)));
         }
     }
 
@@ -872,9 +873,7 @@ static inline void pack_1bpp_to_2683(uint8_t in, uint8_t& out0, uint8_t& out1)
 }
 
 void CustomLcdDisplay::EPD_Display() {
-    unsigned int row, col;
-    unsigned int pcnt;
-    unsigned char temp1,temp2,tempvalue;
+    const uint8_t tempvalue = 232;
 
     const int bytes_per_row_1bpp = (Width + 7) >> 3;       // 400 -> 50
     const int bytes_per_row_out  = bytes_per_row_1bpp * 2; // 100
@@ -885,34 +884,11 @@ void CustomLcdDisplay::EPD_Display() {
     EPD_SendCommand(0x40);
     read_busy();
 
-    temp1=EPD_RecvData(); 
-    ESP_LOGI(TAG, "[EPD_Display]temp1 %d", temp1);
-  
-    if(temp1<=5)
-      tempvalue=232;  // -24
+    EPD_RecvData();
 
-
-    else if(temp1<=10)
-      tempvalue=235;   // -21
-
-
-    else if(temp1<=20)
-      tempvalue=238;   // -18
-
-
-    else if(temp1<=30)
-      tempvalue=241;   // -15
-
-
-    else if(temp1<=127)
-      tempvalue=244;    // -12
-    
-    else
-      tempvalue=232;
-
-    EPD_SendCommand(0xE0); 
+    EPD_SendCommand(0xE0);
     EPD_SendData(0x02);
-    EPD_SendCommand(0xE6);  
+    EPD_SendCommand(0xE6);
     EPD_SendData(tempvalue);
     
     EPD_SendCommand(0xA5);      
