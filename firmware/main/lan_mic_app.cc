@@ -249,9 +249,9 @@ bool LanMicApp::Initialize() {
 #endif
     audio_frame_buffer_.resize(kFrameSamples);
     cli_log_lines_.clear();
-    active_page_ = Page::Todo;
-    voice_mode_ = VoiceMode::Todo;
-    hint_text_ = "长按UP打开菜单\n长按BOOT待办语音";
+    active_page_ = Page::Summary;
+    voice_mode_ = VoiceMode::Normal;
+    hint_text_ = "长按UP打开菜单\n长按BOOT开始语音";
     phase_ = Phase::Idle;
     network_state_ = NetworkState::Offline;
     RefreshBatteryStatus(true);
