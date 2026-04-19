@@ -74,6 +74,7 @@ constexpr int64_t kServerSilenceTimeoutMs = 45000;
 constexpr int64_t kConnectAttemptWatchdogMs = 20000;
 constexpr int64_t kReconnectPromptTimeoutMs = 15000;
 constexpr int64_t kTodoBootHoldMs = 600;
+constexpr int64_t kTodoBootDoubleClickWindowMs = 350;
 constexpr uint32_t kConnectTaskStackSize = 6 * 1024;
 constexpr UBaseType_t kConnectTaskPriority = 2;
 // If no server connection is established within this window, enter deep sleep
@@ -2725,6 +2726,8 @@ void LanMicApp::Run() {
     bool last_pressed = false;
     int64_t boot_pressed_since_ms = 0;
     bool todo_hold_started = false;
+    int64_t last_todo_boot_release_ms = 0;
+    bool todo_boot_short_pending = false;
     int64_t last_reconnect_ms = 0;
     int64_t reconnect_interval_ms = kReconnectIntervalMinMs;
     int64_t last_battery_poll_ms = 0;
@@ -2741,6 +2744,29 @@ void LanMicApp::Run() {
 
     while (true) {
         const int64_t now_ms = esp_timer_get_time() / 1000;
+        if (todo_boot_short_pending &&
+            (todo_menu_open_ ||
+             has_pending_transcript_ ||
+             phase_ == Phase::Recording ||
+             phase_ == Phase::Transcribing ||
+             active_page_ != Page::Todo)) {
+            todo_boot_short_pending = false;
+            last_todo_boot_release_ms = 0;
+        }
+        if (todo_boot_short_pending &&
+            !IsPttPressed() &&
+            (now_ms - last_todo_boot_release_ms) >= kTodoBootDoubleClickWindowMs) {
+            const bool can_toggle_selected_todo =
+                active_page_ == Page::Todo &&
+                !todo_menu_open_ &&
+                !has_pending_transcript_ &&
+                (phase_ == Phase::Idle || phase_ == Phase::Running || phase_ == Phase::Error);
+            todo_boot_short_pending = false;
+            last_todo_boot_release_ms = 0;
+            if (can_toggle_selected_todo) {
+                ToggleSelectedTodo();
+            }
+        }
         if (connect_attempt_completed_.exchange(false, std::memory_order_acq_rel)) {
             reconnect_stuck_prompt_ = false;
             if (IsServerConnected()) {
@@ -2796,6 +2822,8 @@ void LanMicApp::Run() {
             last_ws_ping_ms = 0;
             awaiting_pong_since_ms = 0;
             awaiting_pong_baseline_ms = 0;
+            todo_boot_short_pending = false;
+            last_todo_boot_release_ms = 0;
             UpdateDisplay();
         }
         if ((now_ms - last_battery_poll_ms) >= kBatteryPollIntervalMs) {
@@ -2894,7 +2922,15 @@ void LanMicApp::Run() {
                     todo_hold_started = false;
                 } else if (!pressed_now && last_pressed) {
                     if (!todo_hold_started && boot_pressed_since_ms > 0) {
-                        OpenTodoMenu(TodoMenuKind::TodoAction);
+                        const int64_t elapsed_since_last_release = now_ms - last_todo_boot_release_ms;
+                        if (todo_boot_short_pending && elapsed_since_last_release <= kTodoBootDoubleClickWindowMs) {
+                            todo_boot_short_pending = false;
+                            last_todo_boot_release_ms = 0;
+                            DeleteSelectedTodo();
+                        } else {
+                            todo_boot_short_pending = true;
+                            last_todo_boot_release_ms = now_ms;
+                        }
                     }
                     boot_pressed_since_ms = 0;
                     todo_hold_started = false;
@@ -3124,19 +3160,19 @@ void LanMicApp::Run() {
                 vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
             }
-            const bool can_open_page_menu =
-                phase_ == Phase::Idle || phase_ == Phase::Error;
             const bool defer_normal_short_enter_press =
                 !has_pending_transcript_ &&
                 IsServerConnected() &&
                 send_target_ == "text_injector" &&
                 voice_mode_ == VoiceMode::Normal &&
                 (phase_ == Phase::Idle || phase_ == Phase::Running);
+            const bool can_todo_direct_short_action =
+                active_page_ == Page::Todo &&
+                !has_pending_transcript_ &&
+                (phase_ == Phase::Idle || phase_ == Phase::Error || phase_ == Phase::Running);
             const bool defer_page_press =
                 defer_normal_short_enter_press ||
-                (active_page_ == Page::Todo &&
-                 !has_pending_transcript_ &&
-                 can_open_page_menu);
+                can_todo_direct_short_action;
             if (defer_page_press) {
                 last_pressed = true;
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -3223,7 +3259,15 @@ void LanMicApp::Run() {
                        !todo_hold_started &&
                        boot_pressed_since_ms > 0 &&
                        !has_pending_transcript_) {
-                OpenTodoMenu(TodoMenuKind::TodoAction);
+                const int64_t elapsed_since_last_release = now_ms - last_todo_boot_release_ms;
+                if (todo_boot_short_pending && elapsed_since_last_release <= kTodoBootDoubleClickWindowMs) {
+                    todo_boot_short_pending = false;
+                    last_todo_boot_release_ms = 0;
+                    DeleteSelectedTodo();
+                } else {
+                    todo_boot_short_pending = true;
+                    last_todo_boot_release_ms = now_ms;
+                }
             }
             boot_pressed_since_ms = 0;
             todo_hold_started = false;

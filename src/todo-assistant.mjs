@@ -496,7 +496,7 @@ export class TodoAssistant {
       return {
         ok: false,
         action: "parse",
-        message: "Todo 语义模型暂时不可用，请说：添加计划 XXX",
+        message: localCommand.message || "请说：查看计划、添加计划 XXX、删除计划 2、修改计划 2 改成 XXX",
         pendingIntent: null
       };
     }
