@@ -20,7 +20,9 @@ import { CodexSessionManager } from "./codex-session.mjs";
 import { transcribePcm16Mono } from "./stt.mjs";
 import { createTodoAssistant } from "./todo-assistant.mjs";
 import { createTodoService, VALID_VOICE_MODES } from "./todo-service.mjs";
+import { createAdminRoutes } from "./admin-routes.mjs";
 import { injectText } from "./text-injector.mjs";
+
 
 const config = loadConfig();
 
@@ -1738,10 +1740,21 @@ function undoPendingTranscript(ws, state) {
   sendJson(ws, { type: "status", status: "undo_ok" });
 }
 
+const adminRoutes = createAdminRoutes({
+  config,
+  todoService,
+  getUserTodoListPath,
+  broadcastTodoState,
+  shutdown
+});
+
 const KEEPALIVE_INTERVAL_MS = 30_000;
 const KEEPALIVE_MISS_LIMIT = 2;
 
-const server = createServer();
+const server = createServer((req, res) => {
+  adminRoutes.handleRequest(req, res);
+});
+
 const wss = new WebSocketServer({ server });
 const discoveryServer = startDiscoveryServer(config, { log });
 
