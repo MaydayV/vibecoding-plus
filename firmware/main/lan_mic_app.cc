@@ -2471,8 +2471,14 @@ void LanMicApp::DrawBatteryIcon(int x, int y, int level, bool charging) {
         return;
     }
 
+    const int clamped_level = std::clamp(level, 0, 100);
     std::vector<uint8_t> buffer(kBatteryIcon14x8, kBatteryIcon14x8 + sizeof(kBatteryIcon14x8));
-    const int fill_columns = std::clamp((level * 10) / 100, 0, 10);
+    int fill_columns = (clamped_level + 5) / 10;
+    if (clamped_level > 0 && fill_columns == 0) {
+        fill_columns = 1;
+    }
+    fill_columns = std::clamp(fill_columns, 0, 10);
+
     for (int row = 1; row <= 6; ++row) {
         for (int col = 1; col <= fill_columns; ++col) {
             const int bit_index = row * 16 + col;

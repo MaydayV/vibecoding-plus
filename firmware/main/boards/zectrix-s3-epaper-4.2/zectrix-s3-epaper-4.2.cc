@@ -195,14 +195,20 @@ public:
     bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
         charge_status_.Tick(GetNowMs());
         ChargeStatus::Snapshot snapshot = charge_status_.Get();
-        charging = snapshot.charging;
+        charging = snapshot.power_present;
         discharging = !snapshot.power_present;
 
         uint16_t voltage_mv = 0;
         uint8_t percent = 0;
         const bool ok = ReadBatteryStatus(voltage_mv, percent);
-        level = static_cast<int>(percent);
-        return ok;
+
+        int ui_level = ok ? static_cast<int>(percent) : 0;
+        if (snapshot.full && !snapshot.no_battery) {
+            ui_level = 100;
+        }
+
+        level = std::clamp(ui_level, 0, 100);
+        return ok || (snapshot.full && !snapshot.no_battery);
     }
 
     void SetPowerSaveLevel(PowerSaveLevel level) override {
@@ -459,28 +465,8 @@ private:
             filtered_voltage_mv = (filtered_voltage_mv * 7 + average_voltage * 3) / 10;
         }
 
-        int computed_percent = 0;
-        const int v = filtered_voltage_mv;
-        if (v <= 3300) {
-            computed_percent = 0;
-        } else if (v >= 4200) {
-            computed_percent = 100;
-        } else if (v <= 3600) {
-            computed_percent = (v - 3300) * 20 / 300;
-        } else if (v <= 3700) {
-            computed_percent = 20 + (v - 3600) * 20 / 100;
-        } else if (v <= 3800) {
-            computed_percent = 40 + (v - 3700) * 20 / 100;
-        } else if (v <= 3900) {
-            computed_percent = 60 + (v - 3800) * 15 / 100;
-        } else if (v <= 4000) {
-            computed_percent = 75 + (v - 3900) * 13 / 100;
-        } else if (v <= 4100) {
-            computed_percent = 88 + (v - 4000) * 8 / 100;
-        } else {
-            computed_percent = 96 + (v - 4100) * 4 / 100;
-        }
-
+        int computed_percent =
+            (-1 * filtered_voltage_mv * filtered_voltage_mv + 9016 * filtered_voltage_mv - 19189000) / 10000;
         computed_percent = computed_percent > 100 ? 100 : (computed_percent < 0 ? 0 : computed_percent);
 
         static bool has_last_percent = false;
