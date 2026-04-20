@@ -27,13 +27,33 @@ function normalizePositiveInteger(value) {
   return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
 }
 
+function normalizeTimestamp(value, fallback = "") {
+  const text = collapseWhitespace(value);
+  if (!text) {
+    return fallback;
+  }
+  const timestamp = Date.parse(text);
+  if (!Number.isFinite(timestamp)) {
+    return fallback;
+  }
+  return new Date(timestamp).toISOString();
+}
+
+function timestampMs(value) {
+  const ms = Date.parse(String(value || ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 function cloneItem(item) {
   return {
     id: item.id,
     title: item.title,
     completed: Boolean(item.completed),
     createdAt: item.createdAt,
-    updatedAt: item.updatedAt
+    updatedAt: item.updatedAt,
+    appleId: item.appleId || "",
+    source: item.source || "local",
+    syncUpdatedAt: item.syncUpdatedAt || item.updatedAt
   };
 }
 
@@ -51,15 +71,19 @@ function sanitizePersistedState(rawState) {
         return null;
       }
 
-      const createdAt = collapseWhitespace(item.createdAt) || new Date().toISOString();
-      const updatedAt = collapseWhitespace(item.updatedAt) || createdAt;
+      const createdAt = normalizeTimestamp(item.createdAt, new Date().toISOString());
+      const updatedAt = normalizeTimestamp(item.updatedAt, createdAt);
+      const syncUpdatedAt = normalizeTimestamp(item.syncUpdatedAt, updatedAt);
 
       return {
         id: collapseWhitespace(item.id) || randomUUID(),
         title,
         completed: Boolean(item.completed),
         createdAt,
-        updatedAt
+        updatedAt,
+        appleId: collapseWhitespace(item.appleId),
+        source: collapseWhitespace(item.source) || "local",
+        syncUpdatedAt
       };
     })
     .filter(Boolean);
@@ -86,7 +110,10 @@ function createDefaultTodoState() {
       title,
       completed: false,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      appleId: "",
+      source: "seed",
+      syncUpdatedAt: now
     })),
     selectedIndex: 0
   };
@@ -184,6 +211,7 @@ export class TodoService {
     this.storagePath = storagePath;
     this.seedDefaultItems = seedDefaultItems;
     this.lastActionText = "";
+    this.changeListeners = new Set();
     const loaded = this.#loadState();
     this.items = loaded.items;
     this.selectedIndex = loaded.selectedIndex;
@@ -192,12 +220,37 @@ export class TodoService {
     }
   }
 
+  onChange(listener) {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
+  }
+
   getSnapshot() {
     return {
       items: this.items.map(cloneItem),
       selectedIndex: this.selectedIndex,
       lastActionText: this.lastActionText
     };
+  }
+
+  getDirtySyncItems({ includeSeed = false } = {}) {
+    return this.items
+      .filter((item) => {
+        const source = item.source || "local";
+        if (!includeSeed && source === "seed") {
+          return false;
+        }
+        if (!item.appleId) {
+          return source === "local";
+        }
+        return source === "local" || timestampMs(item.updatedAt) > timestampMs(item.syncUpdatedAt);
+      })
+      .map(cloneItem);
   }
 
   runCommand(command) {
@@ -243,23 +296,31 @@ export class TodoService {
     }
 
     const now = new Date().toISOString();
-    this.items.push({
+    const item = {
       id: randomUUID(),
       title,
       completed: false,
       createdAt: now,
-      updatedAt: now
-    });
+      updatedAt: now,
+      appleId: "",
+      source: "local",
+      syncUpdatedAt: ""
+    };
+    this.items.push(item);
     this.selectedIndex = this.items.length - 1;
     this.lastActionText = `已添加计划 ${this.items.length}`;
     this.#persist();
-    return {
+
+    const result = {
       ok: true,
       action: "create",
       changed: true,
       message: this.lastActionText,
+      item: cloneItem(item),
       snapshot: this.getSnapshot()
     };
+    this.#emitChange(result);
+    return result;
   }
 
   update(index, text, id) {
@@ -272,20 +333,26 @@ export class TodoService {
     const item = this.items[resolvedIndex];
     item.title = title;
     item.updatedAt = new Date().toISOString();
+    item.source = "local";
     this.selectedIndex = resolvedIndex;
     this.lastActionText = `已更新计划 ${resolvedIndex + 1}`;
     this.#persist();
-    return {
+
+    const result = {
       ok: true,
       action: "update",
       changed: true,
       message: this.lastActionText,
+      item: cloneItem(item),
       snapshot: this.getSnapshot()
     };
+    this.#emitChange(result);
+    return result;
   }
 
   delete(index, id) {
     const resolvedIndex = this.#resolveIndex(index, id);
+    const deletedItem = cloneItem(this.items[resolvedIndex]);
     this.items.splice(resolvedIndex, 1);
     if (this.items.length === 0) {
       this.selectedIndex = -1;
@@ -294,28 +361,39 @@ export class TodoService {
     }
     this.lastActionText = `已删除计划 ${resolvedIndex + 1}`;
     this.#persist();
-    return {
+
+    const result = {
       ok: true,
       action: "delete",
       changed: true,
       message: this.lastActionText,
+      deletedItems: [deletedItem],
       snapshot: this.getSnapshot()
     };
+    this.#emitChange(result);
+    return result;
   }
 
   clear() {
     const count = this.items.length;
+    const deletedItems = this.items.map(cloneItem);
     this.items = [];
     this.selectedIndex = -1;
     this.lastActionText = count === 0 ? "暂无计划可删除" : `已删除全部 ${count} 条计划`;
     this.#persist();
-    return {
+
+    const result = {
       ok: true,
       action: "clear",
       changed: count > 0,
       message: this.lastActionText,
+      deletedItems,
       snapshot: this.getSnapshot()
     };
+    if (count > 0) {
+      this.#emitChange(result);
+    }
+    return result;
   }
 
   toggle(index, completed, id) {
@@ -323,18 +401,23 @@ export class TodoService {
     const item = this.items[resolvedIndex];
     item.completed = typeof completed === "boolean" ? completed : !item.completed;
     item.updatedAt = new Date().toISOString();
+    item.source = "local";
     this.selectedIndex = resolvedIndex;
     this.lastActionText = item.completed
       ? `已完成计划 ${resolvedIndex + 1}`
       : `已恢复计划 ${resolvedIndex + 1}`;
     this.#persist();
-    return {
+
+    const result = {
       ok: true,
       action: "toggle",
       changed: true,
       message: this.lastActionText,
+      item: cloneItem(item),
       snapshot: this.getSnapshot()
     };
+    this.#emitChange(result);
+    return result;
   }
 
   selectNext() {
@@ -395,6 +478,133 @@ export class TodoService {
     };
   }
 
+  applyRemoteReminder(reminder) {
+    const appleId = collapseWhitespace(reminder?.appleId || reminder?.id);
+    if (!appleId) {
+      throw new Error("apple_reminder_id_required");
+    }
+    const title = normalizeTitle(reminder?.title);
+    if (!title) {
+      throw new Error("todo_title_required");
+    }
+
+    const remoteUpdatedAt = normalizeTimestamp(reminder?.updatedAt, new Date().toISOString());
+    const remoteCompleted = Boolean(reminder?.completed);
+
+    let item = this.items.find((candidate) => candidate.appleId === appleId);
+    if (!item) {
+      item = {
+        id: randomUUID(),
+        title,
+        completed: remoteCompleted,
+        createdAt: remoteUpdatedAt,
+        updatedAt: remoteUpdatedAt,
+        appleId,
+        source: "apple",
+        syncUpdatedAt: remoteUpdatedAt
+      };
+      this.items.push(item);
+      if (this.selectedIndex < 0) {
+        this.selectedIndex = 0;
+      }
+      this.lastActionText = "苹果待办已同步";
+      this.#persist();
+      return { changed: true, item: cloneItem(item), created: true };
+    }
+
+    const remoteIsNewer = timestampMs(remoteUpdatedAt) >= timestampMs(item.updatedAt);
+    if (!remoteIsNewer && item.source === "local") {
+      return { changed: false, item: cloneItem(item), created: false };
+    }
+
+    const changed =
+      item.title !== title ||
+      item.completed !== remoteCompleted ||
+      item.appleId !== appleId ||
+      item.source !== "apple" ||
+      item.syncUpdatedAt !== remoteUpdatedAt ||
+      item.updatedAt !== remoteUpdatedAt;
+
+    if (!changed) {
+      return { changed: false, item: cloneItem(item), created: false };
+    }
+
+    item.title = title;
+    item.completed = remoteCompleted;
+    item.appleId = appleId;
+    item.source = "apple";
+    item.updatedAt = remoteUpdatedAt;
+    item.syncUpdatedAt = remoteUpdatedAt;
+    this.lastActionText = "苹果待办已同步";
+    this.#persist();
+
+    return { changed: true, item: cloneItem(item), created: false };
+  }
+
+  pruneRemoteMissingAppleIds(presentAppleIds) {
+    const present = presentAppleIds instanceof Set ? presentAppleIds : new Set(presentAppleIds || []);
+    const before = this.items.length;
+    this.items = this.items.filter((item) => {
+      if (!item.appleId) {
+        return true;
+      }
+      if (item.source === "local") {
+        return true;
+      }
+      return present.has(item.appleId);
+    });
+    if (this.items.length === before) {
+      return { changed: false };
+    }
+    if (this.items.length === 0) {
+      this.selectedIndex = -1;
+    } else {
+      this.selectedIndex = Math.min(Math.max(this.selectedIndex, 0), this.items.length - 1);
+    }
+    this.lastActionText = "苹果待办已同步";
+    this.#persist();
+    return { changed: true };
+  }
+
+  markItemSynced(localId, { appleId = "", syncedAt = "" } = {}) {
+    const normalizedLocalId = collapseWhitespace(localId);
+    if (!normalizedLocalId) {
+      return { changed: false, item: null };
+    }
+    const item = this.items.find((candidate) => candidate.id === normalizedLocalId);
+    if (!item) {
+      return { changed: false, item: null };
+    }
+
+    const syncAt = normalizeTimestamp(syncedAt, new Date().toISOString());
+    const nextAppleId = collapseWhitespace(appleId) || item.appleId;
+    const changed =
+      item.appleId !== nextAppleId ||
+      item.syncUpdatedAt !== syncAt ||
+      item.updatedAt !== syncAt ||
+      item.source !== "apple";
+
+    if (!changed) {
+      return { changed: false, item: cloneItem(item) };
+    }
+
+    item.appleId = nextAppleId;
+    item.syncUpdatedAt = syncAt;
+    item.updatedAt = syncAt;
+    item.source = "apple";
+    this.#persist();
+    return { changed: true, item: cloneItem(item) };
+  }
+
+  findByAppleId(appleId) {
+    const normalized = collapseWhitespace(appleId);
+    if (!normalized) {
+      return null;
+    }
+    const item = this.items.find((candidate) => candidate.appleId === normalized);
+    return item ? cloneItem(item) : null;
+  }
+
   #loadState() {
     if (!this.storagePath || !fs.existsSync(this.storagePath)) {
       return this.seedDefaultItems
@@ -437,6 +647,16 @@ export class TodoService {
         2
       )
     );
+  }
+
+  #emitChange(result) {
+    for (const listener of this.changeListeners) {
+      try {
+        listener(result);
+      } catch {
+        // ignore
+      }
+    }
   }
 
   #resolveIndex(index, id) {

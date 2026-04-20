@@ -22,6 +22,7 @@ import { createTodoAssistant } from "./todo-assistant.mjs";
 import { createTodoService, VALID_VOICE_MODES } from "./todo-service.mjs";
 import { createAdminRoutes } from "./admin-routes.mjs";
 import { injectText, undoLastInput } from "./text-injector.mjs";
+import { createTodoRemindersSync } from "./todo-reminders-sync.mjs";
 
 
 const config = loadConfig();
@@ -40,6 +41,64 @@ applyRateLimitSnapshot(readLatestRateLimits());
 
 const MIN_PLAUSIBLE_EPOCH_MS = Date.UTC(2020, 0, 1);
 const VALID_SEND_TARGETS = new Set(["text_injector", "codex_exec", "claude_code"]);
+
+const todoSyncStatus = {
+  enabled: false,
+  command: String(config.remindersRemindctlPath || "remindctl").trim() || "remindctl",
+  list: String(config.remindersListName || "").trim(),
+  pollSec: Math.max(1, Number(config.remindersPollSec || 15)),
+  busy: false,
+  lastSyncAt: "",
+  lastError: "",
+  syncCount: 0
+};
+
+let remindersSyncController = null;
+
+function setTodoSyncStatus(patch) {
+  Object.assign(todoSyncStatus, patch || {});
+}
+
+function getTodoSyncStatus() {
+  return { ...todoSyncStatus };
+}
+
+async function runTodoSyncNow(reason = "manual") {
+  if (!remindersSyncController) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "not_initialized",
+      status: getTodoSyncStatus()
+    };
+  }
+  const result = await remindersSyncController.runSyncOnce({ reason });
+  if (result?.status) {
+    setTodoSyncStatus(result.status);
+  }
+  return result;
+}
+
+const onTodoChanged = () => {
+  broadcastTodoState();
+};
+
+const onTodoSyncStatusChanged = (status) => {
+  if (status) {
+    setTodoSyncStatus(status);
+  }
+};
+
+remindersSyncController = createTodoRemindersSync({
+  config,
+  todoService,
+  onStateChanged: onTodoChanged,
+  onStatusChanged: onTodoSyncStatusChanged,
+  logger: (...parts) => log(...parts)
+});
+setTodoSyncStatus(remindersSyncController.getStatus());
+remindersSyncController.start();
+
 
 const MAX_PLAN_OPTIONS = 8;
 const LOCALHOST_REMOTE_ADDRESSES = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -1808,6 +1867,8 @@ const adminRoutes = createAdminRoutes({
   todoService,
   getUserTodoListPath,
   broadcastTodoState,
+  getTodoSyncStatus,
+  runTodoSyncNow,
   shutdown
 });
 
@@ -2163,6 +2224,7 @@ server.listen(config.port, config.bindHost, () => {
 
 function shutdown() {
   log("shutting down");
+  remindersSyncController?.stop();
   clearInterval(keepaliveInterval);
   if (terminalMirrorPollTimer) {
     clearInterval(terminalMirrorPollTimer);

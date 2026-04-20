@@ -11,12 +11,22 @@ import {
 
 const ADMIN_MAX_BODY_BYTES = 1024 * 1024;
 
+function parseBooleanInput(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const text = String(value || "").trim().toLowerCase();
+  return text === "1" || text === "true" || text === "yes" || text === "on";
+}
+
 export function createAdminRoutes(options) {
   const {
     config,
     todoService,
     getUserTodoListPath,
     broadcastTodoState,
+    getTodoSyncStatus,
+    runTodoSyncNow,
     shutdown
   } = options;
 
@@ -88,7 +98,7 @@ export function createAdminRoutes(options) {
         align-items: center;
         flex-wrap: wrap;
       }
-      input[type="text"], textarea {
+      input[type="text"], input[type="number"], textarea {
         width: 100%;
         border: 1px solid var(--line);
         border-radius: 8px;
@@ -149,6 +159,7 @@ export function createAdminRoutes(options) {
       #status.error { color: #b00020; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
       .split { display: grid; grid-template-columns: 1fr; gap: 10px; }
+      .kv { display: grid; grid-template-columns: 160px 1fr; gap: 8px; align-items: center; }
       @media (min-width: 900px) {
         .split { grid-template-columns: 1.6fr 1fr; }
       }
@@ -164,6 +175,7 @@ export function createAdminRoutes(options) {
 
       <div class="tabs" id="tabs">
         <button class="tab active" data-tab="todos">Todo</button>
+        <button class="tab" data-tab="sync">Sync</button>
         <button class="tab" data-tab="env">ENV</button>
         <button class="tab" data-tab="service">Service</button>
       </div>
@@ -197,6 +209,30 @@ export function createAdminRoutes(options) {
         </div>
       </section>
 
+      <section id="panel-sync" class="panel">
+        <div class="card">
+          <div class="kv">
+            <div>启用苹果同步</div>
+            <div><label><input id="syncEnabled" type="checkbox" /> REMINDERS_SYNC_ENABLED</label></div>
+            <div>remindctl 路径</div>
+            <div><input id="syncCmd" type="text" placeholder="remindctl" /></div>
+            <div>苹果列表名</div>
+            <div><input id="syncList" type="text" placeholder="留空表示全部" /></div>
+            <div>轮询秒数</div>
+            <div><input id="syncPollSec" type="number" min="5" step="1" /></div>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <button id="saveSyncBtn" class="primary">保存同步配置</button>
+            <button id="syncNowBtn">立即同步一次</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="muted" style="margin-bottom:8px;">同步状态</div>
+          <div id="syncStatus" class="mono"></div>
+        </div>
+      </section>
+
       <section id="panel-env" class="panel">
         <div class="card">
           <div class="muted mono" id="envPath"></div>
@@ -221,7 +257,7 @@ export function createAdminRoutes(options) {
       </section>
 
       <div class="muted" style="margin-top:10px;">
-        快捷键：<span class="kbd">⌘/Ctrl+1/2/3</span> 切换 tab，<span class="kbd">⌘/Ctrl+S</span> 保存，<span class="kbd">⌘/Ctrl+R</span> 重启服务
+        快捷键：<span class="kbd">⌘/Ctrl+1/2/3/4</span> 切换 tab，<span class="kbd">⌘/Ctrl+S</span> 保存，<span class="kbd">⌘/Ctrl+R</span> 重启服务
       </div>
     </div>
 
@@ -232,7 +268,8 @@ export function createAdminRoutes(options) {
         selectedTodoId: "",
         envContent: "",
         envDirty: false,
-        pollingTimer: null
+        pollingTimer: null,
+        syncStatus: null
       };
 
       const $ = (id) => document.getElementById(id);
@@ -257,7 +294,7 @@ export function createAdminRoutes(options) {
       }
 
       function switchTab(nextTab) {
-        if (!nextTab || !["todos", "env", "service"].includes(nextTab)) return;
+        if (!nextTab || !["todos", "sync", "env", "service"].includes(nextTab)) return;
         state.tab = nextTab;
         document.querySelectorAll(".tab").forEach((el) => {
           el.classList.toggle("active", el.dataset.tab === nextTab);
@@ -357,6 +394,25 @@ export function createAdminRoutes(options) {
         }
       }
 
+      function renderSyncStatus() {
+        const el = $("syncStatus");
+        const s = state.syncStatus;
+        if (!s) {
+          el.textContent = "暂无同步状态";
+          return;
+        }
+        el.textContent = [
+          "enabled=" + Boolean(s.enabled),
+          "command=" + (s.command || ""),
+          "list=" + (s.list || "(all)"),
+          "pollSec=" + (s.pollSec || ""),
+          "busy=" + Boolean(s.busy),
+          "lastSyncAt=" + (s.lastSyncAt || ""),
+          "syncCount=" + (s.syncCount || 0),
+          "lastError=" + (s.lastError || "")
+        ].join("\\n");
+      }
+
       async function loadTodos() {
         const payload = await api("/api/admin/todos");
         state.todos = payload.snapshot?.items || [];
@@ -365,6 +421,42 @@ export function createAdminRoutes(options) {
           : (state.todos[0]?.id || "");
         $("todoPath").textContent = "文件：" + (payload.storagePath || "");
         renderTodos();
+      }
+
+      async function loadSyncConfig() {
+        const payload = await api("/api/admin/todo-sync");
+        const values = payload.values || {};
+        $("syncEnabled").checked = values.enabled === true;
+        $("syncCmd").value = values.remindctlPath || "";
+        $("syncList").value = values.list || "";
+        $("syncPollSec").value = String(values.pollSec || 15);
+        state.syncStatus = payload.status || null;
+        renderSyncStatus();
+      }
+
+      async function saveSyncConfig() {
+        const payload = {
+          enabled: $("syncEnabled").checked,
+          remindctlPath: $("syncCmd").value,
+          list: $("syncList").value,
+          pollSec: Number($("syncPollSec").value || 15)
+        };
+        await api("/api/admin/todo-sync", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        setStatus("同步配置已保存，请重启服务生效");
+      }
+
+      async function syncNow() {
+        const payload = await api("/api/admin/todo-sync/run", {
+          method: "POST",
+          body: JSON.stringify({ reason: "admin_manual" })
+        });
+        state.syncStatus = payload.status || null;
+        renderSyncStatus();
+        await loadTodos();
+        setStatus(payload.changed ? "同步完成，已有更新" : "同步完成，无变化");
       }
 
       async function addTodo() {
@@ -434,6 +526,8 @@ export function createAdminRoutes(options) {
             void loadTodos().catch(() => {});
           } else if (state.tab === "env" && !state.envDirty) {
             void loadEnv().catch(() => {});
+          } else if (state.tab === "sync") {
+            void loadSyncConfig().catch(() => {});
           }
         }, 2000);
       }
@@ -444,6 +538,8 @@ export function createAdminRoutes(options) {
 
       $("addTodoBtn").addEventListener("click", () => void addTodo().catch((e) => setStatus(e.message, true)));
       $("refreshTodoBtn").addEventListener("click", () => void loadTodos().catch((e) => setStatus(e.message, true)));
+      $("saveSyncBtn").addEventListener("click", () => void saveSyncConfig().catch((e) => setStatus(e.message, true)));
+      $("syncNowBtn").addEventListener("click", () => void syncNow().catch((e) => setStatus(e.message, true)));
       $("saveEnvBtn").addEventListener("click", () => void saveEnv().catch((e) => setStatus(e.message, true)));
       $("refreshEnvBtn").addEventListener("click", () => void loadEnv({ force: true }).catch((e) => setStatus(e.message, true)));
       $("restartBtn").addEventListener("click", () => void restartService().catch((e) => setStatus(e.message, true)));
@@ -460,10 +556,15 @@ export function createAdminRoutes(options) {
         }
         if (command && key === "2") {
           event.preventDefault();
-          switchTab("env");
+          switchTab("sync");
           return;
         }
         if (command && key === "3") {
+          event.preventDefault();
+          switchTab("env");
+          return;
+        }
+        if (command && key === "4") {
           event.preventDefault();
           switchTab("service");
           return;
@@ -475,6 +576,8 @@ export function createAdminRoutes(options) {
             void saveEnv().catch((e) => setStatus(e.message, true));
           } else if (state.tab === "todos") {
             void addTodo().catch((e) => setStatus(e.message, true));
+          } else if (state.tab === "sync") {
+            void saveSyncConfig().catch((e) => setStatus(e.message, true));
           }
           return;
         }
@@ -497,7 +600,7 @@ export function createAdminRoutes(options) {
         }
       });
 
-      Promise.all([loadTodos(), loadEnv()])
+      Promise.all([loadTodos(), loadSyncConfig(), loadEnv()])
         .then(() => {
           startPolling();
           setStatus("管理页已就绪");
@@ -576,6 +679,19 @@ export function createAdminRoutes(options) {
     };
   }
 
+  function getSyncApiPayload() {
+    return {
+      ok: true,
+      values: {
+        enabled: Boolean(config.remindersSyncEnabled),
+        remindctlPath: String(config.remindersRemindctlPath || "remindctl"),
+        list: String(config.remindersListName || ""),
+        pollSec: Number(config.remindersPollSec || 15)
+      },
+      status: typeof getTodoSyncStatus === "function" ? getTodoSyncStatus() : null
+    };
+  }
+
   function getAdminEnvPath() {
     const preferred = String(config.cwdConfigPath || config.projectConfigPath || config.userConfigPath || "").trim();
     return preferred || config.userConfigPath;
@@ -651,6 +767,50 @@ export function createAdminRoutes(options) {
         sendJsonResponse(res, 200, getTodoApiPayload());
         return true;
       }
+    }
+
+    if (pathname === "/api/admin/todo-sync") {
+      if (req.method === "GET") {
+        sendJsonResponse(res, 200, getSyncApiPayload());
+        return true;
+      }
+
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        const updates = {
+          REMINDERS_SYNC_ENABLED: parseBooleanInput(body.enabled) ? "1" : "0",
+          REMINDCTL_PATH: String(body.remindctlPath || "").trim() || "remindctl",
+          REMINDERS_LIST: String(body.list || "").trim(),
+          REMINDERS_POLL_SEC: String(Math.max(5, Number(body.pollSec || 15)))
+        };
+        writeUserConfigValues(updates);
+        loadConfigFiles({ quietMissing: true });
+        sendJsonResponse(res, 200, {
+          ok: true,
+          saved: true,
+          restartRequired: true,
+          values: updates,
+          status: typeof getTodoSyncStatus === "function" ? getTodoSyncStatus() : null
+        });
+        return true;
+      }
+    }
+
+    if (pathname === "/api/admin/todo-sync/run" && req.method === "POST") {
+      const body = await readJsonBody(req);
+      const reason = String(body.reason || "manual").trim() || "manual";
+      const result = typeof runTodoSyncNow === "function"
+        ? await runTodoSyncNow(reason)
+        : { ok: false, skipped: true, reason: "sync_unavailable" };
+      sendJsonResponse(res, 200, {
+        ok: Boolean(result?.ok),
+        changed: Boolean(result?.changed),
+        skipped: Boolean(result?.skipped),
+        reason: String(result?.reason || reason),
+        error: result?.error || "",
+        status: result?.status || (typeof getTodoSyncStatus === "function" ? getTodoSyncStatus() : null)
+      });
+      return true;
     }
 
     if (pathname === "/api/admin/env") {

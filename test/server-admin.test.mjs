@@ -138,10 +138,38 @@ test("admin page and APIs support todo/env editing", async (t) => {
     false
   );
 
-  const envGetRes = await fetch(`http://127.0.0.1:${port}/api/admin/env`);
-  assert.equal(envGetRes.status, 200);
-  const envGetPayload = await envGetRes.json();
-  assert.equal(envGetPayload.ok, true);
+  const syncGetRes = await fetch(`http://127.0.0.1:${port}/api/admin/todo-sync`);
+  assert.equal(syncGetRes.status, 200);
+  const syncGetPayload = await syncGetRes.json();
+  assert.equal(syncGetPayload.ok, true);
+  assert.equal(typeof syncGetPayload.values.enabled, "boolean");
+
+  const syncPostRes = await fetch(`http://127.0.0.1:${port}/api/admin/todo-sync`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      enabled: true,
+      remindctlPath: "remindctl",
+      list: "Inbox",
+      pollSec: 20
+    })
+  });
+  assert.equal(syncPostRes.status, 200);
+  const syncPostPayload = await syncPostRes.json();
+  assert.equal(syncPostPayload.ok, true);
+  assert.equal(syncPostPayload.restartRequired, true);
+  assert.equal(syncPostPayload.values.REMINDERS_SYNC_ENABLED, "1");
+  assert.equal(syncPostPayload.values.REMINDERS_LIST, "Inbox");
+
+  const syncRunRes = await fetch(`http://127.0.0.1:${port}/api/admin/todo-sync/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reason: "test_manual" })
+  });
+  assert.equal(syncRunRes.status, 200);
+  const syncRunPayload = await syncRunRes.json();
+  assert.equal(typeof syncRunPayload.ok, "boolean");
+  assert.equal(typeof syncRunPayload.reason, "string");
 
   const envText = "TEST_ADMIN_ENV=1\nADMIN_KEY=abc\n";
   const envPostRes = await fetch(`http://127.0.0.1:${port}/api/admin/env`, {

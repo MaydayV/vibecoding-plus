@@ -170,6 +170,22 @@ function normalizeTodoIntentProvider(value, apiKey) {
   return apiKey ? "deepseek" : "rules";
 }
 
+function normalizeBooleanEnv(value, defaultValue = false) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return defaultValue;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function normalizePositiveNumber(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+  return numeric;
+}
+
 export function isCliAvailable(command) {
   if (!command) {
     return false;
@@ -392,6 +408,12 @@ export function loadConfig(options = {}) {
     todoIntentTimeoutMs: Number(process.env.TODO_INTENT_TIMEOUT_MS || "8000"),
     todoFollowupTimeoutMs: Number(process.env.TODO_FOLLOWUP_TIMEOUT_MS || "30000"),
     deepseekApiKey: process.env.DEEPSEEK_API_KEY || "",
+    remindersSyncEnabled: normalizeBooleanEnv(process.env.REMINDERS_SYNC_ENABLED, false),
+    remindersRemindctlPath: String(process.env.REMINDCTL_PATH || "remindctl").trim() || "remindctl",
+    remindersListName: String(process.env.REMINDERS_LIST || "").trim(),
+    remindersPollSec: normalizePositiveNumber(process.env.REMINDERS_POLL_SEC || "15", 15),
+    remindersRemindctlTimeoutMs: normalizePositiveNumber(process.env.REMINDCTL_TIMEOUT_MS || "20000", 20000),
+
     dryRunTextInjection: process.env.DRY_RUN_TEXT_INJECTION === "1",
     terminalMirrorTargets: String(process.env.TERMINAL_MIRROR_TARGETS || "").trim(),
     terminalMirrorEnabled: process.env.TERMINAL_MIRROR_ENABLED === "1",
@@ -434,6 +456,7 @@ export function loadConfig(options = {}) {
     qwenAsrSampleRate: Number(process.env.QWEN_ASR_SAMPLE_RATE || "16000"),
     mockTranscript: process.env.MOCK_TRANSCRIPT || "",
     saveDebugWav: process.env.SAVE_DEBUG_WAV === "1",
+    loadedConfigFiles,
     userConfigPath,
     cwdConfigPath,
     projectConfigPath
