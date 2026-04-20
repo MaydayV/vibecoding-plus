@@ -143,6 +143,7 @@ private:
     std::string cached_server_uri_;
     std::string paired_host_id_;
     std::string paired_host_name_;
+    std::string nfc_last_uri_;
 
     bool Initialize();
     void LoadPersistedNetworkState();
@@ -150,6 +151,10 @@ private:
     void SavePairedHost(const std::string& host_id, const std::string& host_name);
     void ClearPersistedHost();
     void ClearCachedServerUri();
+    void UpdateNfcProvisionUri(const std::string& event_hint);
+    void UpdateNfcAdminUri(const std::string& ws_uri);
+    void WriteNfcUriIfNeeded(const std::string& uri, const char* reason);
+    std::string BuildAdminUrlFromWsUri(const std::string& ws_uri) const;
     void RequestWifiReconfigureByReboot(const char* status_text, const char* hint_text);
     void ConfigureButtons();
     bool IsWifiConnected() const;

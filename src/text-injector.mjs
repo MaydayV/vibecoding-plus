@@ -134,6 +134,45 @@ end try
   });
 }
 
+function runMacUndoLastInput(charCount) {
+  return new Promise((resolve, reject) => {
+    const boundedCount = Math.max(0, Number(charCount) || 0);
+    const script = `
+set keyCount to ${boundedCount}
+if keyCount <= 0 then
+  return
+end if
+tell application "System Events"
+  repeat keyCount times
+    key code 51
+  end repeat
+end tell
+`;
+
+    const child = spawn("osascript", ["-e", script], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(stderr.trim() || stdout.trim() || `osascript exited with code ${code}`));
+    });
+  });
+}
+
 export async function injectText(text, mode, options = {}) {
   const trimmed = String(text || "").trim();
   const forceEnter = Boolean(options.forceEnter);
@@ -165,4 +204,35 @@ export async function injectText(text, mode, options = {}) {
   }
 
   throw new Error(`text injection is only implemented for Windows/macOS in this MVP, got ${process.platform}`);
+}
+
+export async function undoLastInput(charCount, options = {}) {
+  const boundedCount = Math.max(0, Number(charCount) || 0);
+  if (boundedCount === 0) {
+    return;
+  }
+
+  if (options.dryRun) {
+    console.log("[inject-undo] dry-run", { charCount: boundedCount });
+    return;
+  }
+
+  if (process.platform === "win32") {
+    const script = `
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Windows.Forms
+for ($i = 0; $i -lt ${boundedCount}; $i++) {
+  [System.Windows.Forms.SendKeys]::SendWait("{BACKSPACE}")
+}
+`;
+    await runPowerShellScript(script, {});
+    return;
+  }
+
+  if (process.platform === "darwin") {
+    await runMacUndoLastInput(boundedCount);
+    return;
+  }
+
+  throw new Error(`undo input is only implemented for Windows/macOS in this MVP, got ${process.platform}`);
 }

@@ -210,3 +210,64 @@ test("server injects text on macOS when send target is text_injector", async (t)
   assert.match(output, /\[inject\] dry-run/);
   assert.match(output, /forceEnter:\s*true/);
 });
+
+test("server undo removes last injected sentence in immediate mode", async (t) => {
+  const port = await getFreePort();
+  const appDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibe-server-macos-undo-"));
+  const server = spawn(process.execPath, ["src/server.mjs"], {
+    cwd: path.resolve("."),
+    env: {
+      ...process.env,
+      APPDATA: appDataRoot,
+      LAN_DISCOVERY_ENABLED: "0",
+      LAN_VOICE_BIND: "127.0.0.1",
+      LAN_VOICE_PORT: String(port),
+      MOCK_TRANSCRIPT: "hello mac",
+      SEND_TARGET: "text_injector",
+      DRY_RUN_TEXT_INJECTION: "1",
+      TODO_INTENT_PROVIDER: "rules",
+      TRANSCRIPT_DELIVERY_MODE: "immediate",
+      LAN_TRUST_LOCALHOST: "1"
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  const serverOutput = [];
+  server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
+  server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
+
+  t.after(async () => {
+    await stopServer(server);
+    fs.rmSync(appDataRoot, { recursive: true, force: true });
+  });
+
+  const ws = await connectWebSocket(`ws://127.0.0.1:${port}`);
+  const messages = createMessageCollector(ws);
+  t.after(() => closeWebSocket(ws));
+
+  ws.send(JSON.stringify({ type: "hello", deviceId: "mac-undo-client" }));
+  await messages.waitFor((message) => message.type === "hello_ack");
+  await messages.waitFor((message) => message.type === "server_ready");
+
+  ws.send(JSON.stringify({ type: "ptt_start", ts: Date.now() }));
+  ws.send(Buffer.from([0x00, 0x00]), { binary: true });
+  ws.send(JSON.stringify({ type: "ptt_stop", ts: Date.now() }));
+  await messages.waitFor(
+    (message) => message.type === "status" && message.status === "typed" && message.text === "hello mac",
+    6000
+  );
+
+  ws.send(JSON.stringify({ type: "action_undo", ts: Date.now() }));
+  await messages.waitFor((message) => message.type === "transcript_cleared", 6000);
+  const undoStatus = await messages.waitFor(
+    (message) => message.type === "status" && message.status === "undo_ok",
+    6000
+  );
+  assert.equal(undoStatus.text, "");
+
+  await sleep(200);
+  const output = serverOutput.join("");
+  assert.match(output, /\[inject\] dry-run/);
+  assert.match(output, /\[inject-undo\] dry-run/);
+  assert.match(output, /charCount:\s*9/);
+});

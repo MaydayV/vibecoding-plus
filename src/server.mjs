@@ -21,7 +21,7 @@ import { transcribePcm16Mono } from "./stt.mjs";
 import { createTodoAssistant } from "./todo-assistant.mjs";
 import { createTodoService, VALID_VOICE_MODES } from "./todo-service.mjs";
 import { createAdminRoutes } from "./admin-routes.mjs";
-import { injectText } from "./text-injector.mjs";
+import { injectText, undoLastInput } from "./text-injector.mjs";
 
 
 const config = loadConfig();
@@ -1236,6 +1236,7 @@ function createClientState() {
     audioBytes: 0,
     pendingSegments: [],
     pendingTranscript: "",
+    injectedSegments: [],
     pendingTodoIntent: null,
     pendingTodoIntentExpiresAt: 0,
     pendingTodoTimer: null,
@@ -1264,6 +1265,32 @@ function joinPendingSegments(segments) {
 function updatePendingTranscript(state) {
   state.pendingTranscript = joinPendingSegments(state.pendingSegments);
   return state.pendingTranscript;
+}
+
+function joinInjectedSegments(segments) {
+  const normalized = segments
+    .map((segment) => String(segment || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  return normalized.reduce((combined, segment) => {
+    if (!combined) {
+      return segment;
+    }
+
+    const endsWithPunctuation = /[。！？!?；;：:，,、.]$/.test(combined);
+    const startsWithPunctuation = /^[。！？!?；;：:，,、.]/.test(segment);
+    return combined + (endsWithPunctuation || startsWithPunctuation ? "" : " ") + segment;
+  }, "");
+}
+
+function updateInjectedTranscript(state) {
+  return joinInjectedSegments(state.injectedSegments || []);
+}
+
+function clearPendingAndInjectedTranscripts(state) {
+  state.pendingTranscript = "";
+  state.pendingSegments = [];
+  state.injectedSegments = [];
 }
 
 function emitCliSnapshot(ws) {
@@ -1617,7 +1644,7 @@ async function finalizeSegment(ws, state) {
     if (codexSession.isRunning()) {
       throw new Error("Codex session is busy");
     }
-    state.pendingTranscript = "";
+    clearPendingAndInjectedTranscripts(state);
     sendJson(ws, { type: "status", status: "typed", text: transcript });
     launchCodexPrompt(transcript);
     return;
@@ -1627,7 +1654,7 @@ async function finalizeSegment(ws, state) {
     if (claudeSession.isRunning()) {
       throw new Error("Claude session is busy");
     }
-    state.pendingTranscript = "";
+    clearPendingAndInjectedTranscripts(state);
     sendJson(ws, { type: "status", status: "typed", text: transcript });
     launchClaudePrompt(transcript, {
       extractPlanOptions: true,
@@ -1638,7 +1665,8 @@ async function finalizeSegment(ws, state) {
   }
 
   await dispatchPrompt(transcript);
-  state.pendingTranscript = "";
+  state.injectedSegments.push(transcript);
+  state.pendingSegments = [];
   sendJson(ws, { type: "status", status: "typed", text: transcript });
 }
 
@@ -1673,19 +1701,17 @@ async function dispatchPrompt(prompt, options = {}) {
   });
 }
 
-async function dispatchUserPrompt(ws, prompt, state) {
+function dispatchUserPrompt(ws, prompt, state) {
   clearPlanOptions(ws, state);
   if (getVoiceMode(state) === "todo") {
-    await dispatchTodoPrompt(ws, prompt, state);
-    return "todo";
+    return dispatchTodoPrompt(ws, prompt, state).then(() => "todo");
   }
 
-  await dispatchPrompt(prompt, {
+  return dispatchPrompt(prompt, {
     extractPlanOptions: true,
     planOptionsWs: ws,
     planOptionsState: state
-  });
-  return "normal";
+  }).then(() => "normal");
 }
 
 async function sendPendingTranscript(ws, state) {
@@ -1697,8 +1723,7 @@ async function sendPendingTranscript(ws, state) {
   }
 
   if (voiceMode === "todo") {
-    state.pendingTranscript = "";
-    state.pendingSegments = [];
+    clearPendingAndInjectedTranscripts(state);
     await dispatchTodoPrompt(ws, transcript, state);
     return;
   }
@@ -1718,26 +1743,64 @@ async function sendPendingTranscript(ws, state) {
     throw error;
   }
 
+  if (voiceMode === "normal" && config.sendTarget === "text_injector") {
+    state.injectedSegments.push(transcript);
+  }
   state.pendingTranscript = "";
   state.pendingSegments = [];
   sendJson(ws, { type: "status", status: "typed", text: transcript });
 }
 
-function undoPendingTranscript(ws, state) {
-  if (state.pendingSegments.length === 0) {
+async function undoPendingTranscript(ws, state) {
+  if (state.pendingSegments.length > 0) {
+    state.pendingSegments.pop();
+    const transcript = updatePendingTranscript(state);
+    if (transcript) {
+      sendJson(ws, { type: "status", status: "awaiting_action", text: transcript });
+      return;
+    }
+
+    sendJson(ws, { type: "transcript_cleared" });
+    sendJson(ws, { type: "status", status: "undo_ok" });
+    return;
+  }
+
+  if (getVoiceMode(state) !== "normal" || config.sendTarget !== "text_injector" || state.injectedSegments.length === 0) {
     sendJson(ws, { type: "status", status: "no_pending" });
     return;
   }
 
-  state.pendingSegments.pop();
-  const transcript = updatePendingTranscript(state);
-  if (transcript) {
-    sendJson(ws, { type: "status", status: "awaiting_action", text: transcript });
+  const previousTranscript = updateInjectedTranscript(state);
+  const removedSegment = state.injectedSegments.pop();
+  const nextTranscript = updateInjectedTranscript(state);
+  const previousLength = [...previousTranscript].length;
+  const nextLength = [...nextTranscript].length;
+  const charsToUndo =
+    Math.max(0, previousLength - nextLength) + (config.textInjectionMode === "type_and_enter" ? 1 : 0);
+
+  if (charsToUndo <= 0) {
+    if (removedSegment !== undefined) {
+      state.injectedSegments.push(removedSegment);
+    }
+    sendJson(ws, { type: "status", status: "no_pending" });
     return;
   }
 
-  sendJson(ws, { type: "transcript_cleared" });
-  sendJson(ws, { type: "status", status: "undo_ok" });
+  try {
+    await undoLastInput(charsToUndo, {
+      dryRun: config.dryRunTextInjection
+    });
+  } catch (error) {
+    if (removedSegment !== undefined) {
+      state.injectedSegments.push(removedSegment);
+    }
+    throw error;
+  }
+
+  if (!nextTranscript) {
+    sendJson(ws, { type: "transcript_cleared" });
+  }
+  sendJson(ws, { type: "status", status: "undo_ok", text: nextTranscript });
 }
 
 const adminRoutes = createAdminRoutes({
@@ -1865,7 +1928,7 @@ wss.on("connection", (ws, req) => {
             break;
           }
           log("action_undo", state.deviceId);
-          undoPendingTranscript(ws, state);
+          await undoPendingTranscript(ws, state);
           break;
         case "plan_select": {
           if (!state.authenticated) {

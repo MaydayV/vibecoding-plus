@@ -23,7 +23,9 @@
 #include "board.h"
 #include "boards/zectrix-s3-epaper-4.2/config.h"
 
+#include "boards/zectrix/zectrix_nfc.h"
 extern "C" void ZectrixSetFactoryLedOverride(bool enabled, bool blink);
+extern "C" ZectrixNfc* __attribute__((weak)) ZectrixGetNfc();
 #include "display.h"
 #include "network_interface.h"
 #include "settings.h"
@@ -280,6 +282,9 @@ bool LanMicApp::Initialize() {
                 server_uri_.clear();
                 hint_text_ = CONFIG_LAN_DISCOVERY_ENABLED ? GetDiscoveryHintText() : "连接服务器中...";
                 UpdateDisplay();
+                if (!cached_server_uri_.empty()) {
+                    UpdateNfcAdminUri(cached_server_uri_);
+                }
                 break;
             case NetworkEvent::Disconnected:
                 ESP_LOGW(kTag, "WiFi disconnected");
@@ -305,6 +310,7 @@ bool LanMicApp::Initialize() {
                 active_page_ = Page::Summary;
                 summary_scroll_offset_ = 0;
                 UpdateDisplay();
+                UpdateNfcProvisionUri(data);
                 break;
             case NetworkEvent::WifiConfigModeExit:
                 ESP_LOGI(kTag, "WiFi config mode exited");
@@ -406,6 +412,104 @@ void LanMicApp::ClearCachedServerUri() {
     ESP_LOGW(kTag, "Cleared stale cached server URI: %s", cached_server_uri_.c_str());
     cached_server_uri_.clear();
 }
+
+
+void LanMicApp::UpdateNfcProvisionUri(const std::string& event_hint) {
+    const std::string ap_url = WifiManager::GetInstance().GetApWebUrl();
+    if (!ap_url.empty()) {
+        WriteNfcUriIfNeeded(ap_url, "wifi_config_mode");
+        return;
+    }
+
+    std::string fallback = event_hint;
+    const size_t last_space = fallback.find_last_of(' ');
+    if (last_space != std::string::npos && (last_space + 1) < fallback.size()) {
+        const std::string maybe_url = fallback.substr(last_space + 1);
+        if (maybe_url.rfind("http://", 0) == 0 || maybe_url.rfind("https://", 0) == 0) {
+            fallback = maybe_url;
+        }
+    }
+
+    if (fallback.rfind("http://", 0) == 0 || fallback.rfind("https://", 0) == 0) {
+        WriteNfcUriIfNeeded(fallback, "wifi_config_mode_hint");
+    }
+}
+
+void LanMicApp::UpdateNfcAdminUri(const std::string& ws_uri) {
+    const std::string admin_url = BuildAdminUrlFromWsUri(ws_uri);
+    if (admin_url.empty()) {
+        return;
+    }
+    WriteNfcUriIfNeeded(admin_url, "server_connected");
+}
+
+void LanMicApp::WriteNfcUriIfNeeded(const std::string& uri, const char* reason) {
+    if (uri.empty() || uri == nfc_last_uri_) {
+        return;
+    }
+
+    if (ZectrixGetNfc == nullptr) {
+        return;
+    }
+
+    ZectrixNfc* nfc = ZectrixGetNfc();
+    if (nfc == nullptr) {
+        return;
+    }
+    if (!nfc->IsPowered() && !nfc->PowerOn()) {
+        ESP_LOGW(kTag, "NFC power on failed before write: reason=%s", reason != nullptr ? reason : "unknown");
+        return;
+    }
+
+    const esp_err_t ret = nfc->WriteUriNdef(uri);
+    if (ret != ESP_OK) {
+        ESP_LOGW(kTag,
+                 "NFC write uri failed: reason=%s ret=%s uri=%s",
+                 reason != nullptr ? reason : "unknown",
+                 esp_err_to_name(ret),
+                 uri.c_str());
+        return;
+    }
+
+    nfc_last_uri_ = uri;
+    ESP_LOGI(kTag,
+             "NFC uri updated: reason=%s uri=%s",
+             reason != nullptr ? reason : "unknown",
+             nfc_last_uri_.c_str());
+}
+
+
+std::string LanMicApp::BuildAdminUrlFromWsUri(const std::string& ws_uri) const {
+    if (ws_uri.empty()) {
+        return "";
+    }
+
+    const std::string ws_prefix = "ws://";
+    const std::string wss_prefix = "wss://";
+    bool secure = false;
+    size_t authority_start = 0;
+    if (ws_uri.rfind(ws_prefix, 0) == 0) {
+        secure = false;
+        authority_start = ws_prefix.size();
+    } else if (ws_uri.rfind(wss_prefix, 0) == 0) {
+        secure = true;
+        authority_start = wss_prefix.size();
+    } else {
+        return "";
+    }
+
+    size_t authority_end = ws_uri.find('/', authority_start);
+    if (authority_end == std::string::npos) {
+        authority_end = ws_uri.size();
+    }
+    if (authority_end <= authority_start) {
+        return "";
+    }
+
+    const std::string authority = ws_uri.substr(authority_start, authority_end - authority_start);
+    return std::string(secure ? "https://" : "http://") + authority + "/admin";
+}
+
 
 void LanMicApp::RequestWifiReconfigureByReboot(const char* status_text, const char* hint_text) {
     bool expected = false;
@@ -598,6 +702,7 @@ bool LanMicApp::EnsureWebSocketConnected() {
         ESP_LOGI(kTag, "WebSocket connected");
         board_.SetPowerSaveLevel(PowerSaveLevel::BALANCED);
         SaveCachedServerUri(target_uri_text);
+        UpdateNfcAdminUri(target_uri_text);
         network_state_ = NetworkState::Server;
         status_text_ = "已连接";
         hint_text_ = "";  // BuildPromptBody() will show default hold-to-talk hint
@@ -3097,7 +3202,12 @@ void LanMicApp::Run() {
             }
         }
         if (down_click) {
-            if (has_pending_transcript_) {
+            const bool normal_mode_undo =
+                !has_pending_transcript_ &&
+                voice_mode_ == VoiceMode::Normal &&
+                active_page_ == Page::Summary &&
+                (phase_ == Phase::Idle || phase_ == Phase::Running);
+            if (has_pending_transcript_ || normal_mode_undo) {
                 if (IsServerConnected()) {
                     SendAction("action_undo");
                 } else {
