@@ -138,6 +138,34 @@ STT 相关（四选一）
 - `VOLCENGINE_APP_KEY` + `VOLCENGINE_ACCESS_KEY`
 - `WHISPER_CPP_MODEL_PATH`
 
+### 苹果提醒事项 → 待办同步配置
+
+依赖：
+- macOS 已安装并可运行 `remindctl`
+- 已授予提醒事项访问权限（首次会有系统权限提示）
+
+推荐在管理页 `/admin` 的“提醒事项同步”里配置：
+- 启用提醒事项同步
+- `remindctl` 路径（例如 `/opt/homebrew/bin/remindctl`）
+- 提醒事项列表（留空表示同步全部列表）
+- 轮询秒数（最小 5）
+
+对应环境变量：
+- `REMINDERS_SYNC_ENABLED=1`
+- `REMINDCTL_PATH=/opt/homebrew/bin/remindctl`
+- `REMINDERS_LIST=提醒`（可留空）
+- `REMINDERS_POLL_SEC=60`
+
+验证方法：
+1. 管理页点击“立即同步一次”
+2. 查看 `/api/admin/todo-sync` 中 `status.lastError` 是否为空
+3. 查看 `/api/admin/todos` 的 `snapshot.items` 是否包含 `source="apple"` 且有 `appleId`
+
+常见问题：
+- 看不到条目：先确认同步的是“未完成提醒事项”（已完成不会进入活动待办）
+- 页面不更新：`Cmd/Ctrl+Shift+R` 强制刷新管理页
+- 仍不同步：检查 `remindctl all --json` 与 `remindctl all --list "<列表名>" --json` 是否有数据
+
 ---
 
 ## 设备交互要点
