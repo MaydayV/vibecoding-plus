@@ -61,9 +61,13 @@ export function createTodoRemindersSync(options) {
     for (const item of dirtyItems) {
       try {
         if (item.appleId) {
+          if (item.completed) {
+            await client.deleteReminder(item.appleId);
+            continue;
+          }
           const edited = await client.editReminder(item.appleId, {
             title: item.title,
-            completed: item.completed
+            completed: false
           });
           const marked = todoService.markItemSynced(item.id, {
             appleId: edited.id || item.appleId,
@@ -75,9 +79,13 @@ export function createTodoRemindersSync(options) {
           continue;
         }
 
+        if (item.completed) {
+          continue;
+        }
+
         const created = await client.addReminder({
           title: item.title,
-          completed: item.completed
+          completed: false
         });
         const marked = todoService.markItemSynced(item.id, {
           appleId: created.id,
@@ -100,11 +108,14 @@ export function createTodoRemindersSync(options) {
     let changed = false;
 
     for (const reminder of reminders) {
+      if (reminder.completed) {
+        continue;
+      }
       presentAppleIds.add(reminder.id);
       const result = todoService.applyRemoteReminder({
         appleId: reminder.id,
         title: reminder.title,
-        completed: reminder.completed,
+        completed: false,
         updatedAt: reminder.updatedAt
       });
       if (result.changed) {
@@ -118,6 +129,35 @@ export function createTodoRemindersSync(options) {
     }
 
     return changed;
+  }
+
+  async function deleteRemoteReminders(appleIds = []) {
+    const targets = Array.from(new Set((Array.isArray(appleIds) ? appleIds : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)));
+    if (targets.length === 0) {
+      return { ok: true, deleted: 0, failed: 0, errors: [] };
+    }
+
+    let deleted = 0;
+    let failed = 0;
+    const errors = [];
+    for (const appleId of targets) {
+      try {
+        await client.deleteReminder(appleId);
+        deleted += 1;
+      } catch (error) {
+        failed += 1;
+        errors.push({ appleId, message: mapMessage(error, "delete_failed") });
+      }
+    }
+
+    return {
+      ok: failed === 0,
+      deleted,
+      failed,
+      errors
+    };
   }
 
   async function runSyncOnce({ reason = "manual" } = {}) {
@@ -206,6 +246,7 @@ export function createTodoRemindersSync(options) {
     start,
     stop,
     runSyncOnce,
+    deleteRemoteReminders,
     getStatus: snapshotStatus,
     isEnabled: () => enabled
   };

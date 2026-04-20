@@ -44,22 +44,26 @@ test("TodoService supports CRUD and selection", () => {
 
     service.runCommand({ action: "toggle", id: firstId });
     snapshot = service.getSnapshot();
-    assert.equal(snapshot.items[0].completed, true);
+    const archivedFirst = snapshot.archiveItems.find((item) => item.id === firstId);
+    assert.ok(archivedFirst);
+    assert.equal(archivedFirst.completed, true);
 
     service.runCommand({ action: "update", id: secondId, text: "Ship stable release" });
     snapshot = service.getSnapshot();
-    assert.equal(snapshot.items[1].title, "Ship stable release");
+    assert.equal(snapshot.items[0].title, "Ship stable release");
 
     service.runCommand({ action: "delete", id: firstId });
     snapshot = service.getSnapshot();
     assert.equal(snapshot.items.length, 1);
     assert.equal(snapshot.items[0].title, "Ship stable release");
     assert.equal(snapshot.selectedIndex, 0);
+    assert.equal(snapshot.archiveItems.some((item) => item.id === firstId), false);
 
     const clearResult = service.runCommand({ action: "clear" });
     snapshot = service.getSnapshot();
     assert.equal(clearResult.action, "clear");
     assert.equal(snapshot.items.length, 0);
+    assert.equal(snapshot.archiveItems.length, 0);
     assert.equal(snapshot.selectedIndex, -1);
 
     const persisted = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -98,6 +102,7 @@ test("TodoService seeds onboarding examples when storage is missing", () => {
     assert.match(snapshot.items[1].title, /UP\/DN/);
     assert.match(snapshot.items[2].title, /短按 BOOT/);
     assert.match(snapshot.items[3].title, /双击 UP/);
+    assert.equal(snapshot.archiveItems.length, 0);
     assert.equal(fs.existsSync(filePath), true);
 
     const persisted = JSON.parse(fs.readFileSync(filePath, "utf8"));

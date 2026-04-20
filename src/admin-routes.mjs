@@ -8,6 +8,7 @@ import {
   readUserConfigValues,
   writeUserConfigValues
 } from "./config.mjs";
+import { createRemindctlClient } from "./reminders-sync.mjs";
 
 const ADMIN_MAX_BODY_BYTES = 1024 * 1024;
 
@@ -19,6 +20,20 @@ function parseBooleanInput(value) {
   return text === "1" || text === "true" || text === "yes" || text === "on";
 }
 
+function normalizeReminderListOptions(lists) {
+  if (!Array.isArray(lists)) {
+    return [];
+  }
+  return lists
+    .map((item) => ({
+      id: String(item?.id || "").trim(),
+      title: String(item?.title || "").trim(),
+      reminderCount: Number(item?.reminderCount || 0),
+      overdueCount: Number(item?.overdueCount || 0)
+    }))
+    .filter((item) => item.id && item.title);
+}
+
 export function createAdminRoutes(options) {
   const {
     config,
@@ -27,6 +42,7 @@ export function createAdminRoutes(options) {
     broadcastTodoState,
     getTodoSyncStatus,
     runTodoSyncNow,
+    deleteTodoRemindersByItems = async () => ({ ok: false, skipped: true, reason: "delete_unavailable" }),
     shutdown
   } = options;
 
@@ -98,7 +114,7 @@ export function createAdminRoutes(options) {
         align-items: center;
         flex-wrap: wrap;
       }
-      input[type="text"], input[type="number"], textarea {
+      input[type="text"], input[type="number"], select, textarea {
         width: 100%;
         border: 1px solid var(--line);
         border-radius: 8px;
@@ -176,6 +192,7 @@ export function createAdminRoutes(options) {
       <div class="tabs" id="tabs">
         <button class="tab active" data-tab="todos">待办</button>
         <button class="tab" data-tab="sync">苹果同步</button>
+        <button class="tab" data-tab="archive">归档待办</button>
         <button class="tab" data-tab="env">环境变量</button>
         <button class="tab" data-tab="service">服务</button>
       </div>
@@ -217,11 +234,18 @@ export function createAdminRoutes(options) {
             <div>remindctl 路径</div>
             <div><input id="syncCmd" type="text" placeholder="remindctl" /></div>
             <div>苹果列表名</div>
-            <div><input id="syncList" type="text" placeholder="留空表示全部" /></div>
+            <div>
+              <select id="syncList">
+                <option value="">全部列表</option>
+              </select>
+            </div>
+            <div></div>
+            <div class="muted" id="syncListHint">正在加载列表...</div>
             <div>轮询秒数</div>
             <div><input id="syncPollSec" type="number" min="5" step="1" /></div>
           </div>
           <div class="row" style="margin-top:10px;">
+            <button id="reloadListsBtn">刷新列表</button>
             <button id="saveSyncBtn" class="primary">保存同步配置</button>
             <button id="syncNowBtn">立即同步一次</button>
           </div>
@@ -229,7 +253,22 @@ export function createAdminRoutes(options) {
 
         <div class="card">
           <div class="muted" style="margin-bottom:8px;">同步状态</div>
-          <div id="syncStatus" class="mono"></div>
+          <div id="syncStatus"></div>
+        </div>
+      </section>
+
+      <section id="panel-archive" class="panel">
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:84px;">状态</th>
+                <th>标题</th>
+                <th style="width:180px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="archiveTableBody"></tbody>
+          </table>
         </div>
       </section>
 
@@ -257,7 +296,7 @@ export function createAdminRoutes(options) {
       </section>
 
       <div class="muted" style="margin-top:10px;">
-        快捷键：<span class="kbd">⌘/Ctrl+1/2/3/4</span> 切换 tab，<span class="kbd">⌘/Ctrl+S</span> 保存，<span class="kbd">⌘/Ctrl+R</span> 重启服务
+        快捷键：<span class="kbd">⌘/Ctrl+1/2/3/4/5</span> 切换 tab，<span class="kbd">⌘/Ctrl+S</span> 保存，<span class="kbd">⌘/Ctrl+R</span> 重启服务
       </div>
     </div>
 
@@ -265,11 +304,13 @@ export function createAdminRoutes(options) {
       const state = {
         tab: "todos",
         todos: [],
+        archiveTodos: [],
         selectedTodoId: "",
         envContent: "",
         envDirty: false,
         pollingTimer: null,
-        syncStatus: null
+        syncStatus: null,
+        syncLists: []
       };
 
       const $ = (id) => document.getElementById(id);
@@ -294,7 +335,7 @@ export function createAdminRoutes(options) {
       }
 
       function switchTab(nextTab) {
-        if (!nextTab || !["todos", "sync", "env", "service"].includes(nextTab)) return;
+        if (!nextTab || !["todos", "sync", "archive", "env", "service"].includes(nextTab)) return;
         state.tab = nextTab;
         document.querySelectorAll(".tab").forEach((el) => {
           el.classList.toggle("active", el.dataset.tab === nextTab);
@@ -394,33 +435,156 @@ export function createAdminRoutes(options) {
         }
       }
 
+      function renderArchiveTodos() {
+        const archiveBodyEl = $("archiveTableBody");
+        archiveBodyEl.innerHTML = "";
+        if (!Array.isArray(state.archiveTodos) || state.archiveTodos.length === 0) {
+          const row = document.createElement("tr");
+          row.innerHTML = '<td colspan="3" class="muted">暂无归档待办</td>';
+          archiveBodyEl.appendChild(row);
+          return;
+        }
+
+        for (const item of state.archiveTodos) {
+          const tr = document.createElement("tr");
+
+          const stateTd = document.createElement("td");
+          stateTd.textContent = "已完成";
+
+          const titleTd = document.createElement("td");
+          titleTd.textContent = item.title;
+
+          const actionTd = document.createElement("td");
+          actionTd.className = "row";
+
+          const restoreBtn = document.createElement("button");
+          restoreBtn.textContent = "恢复";
+          restoreBtn.addEventListener("click", async () => {
+            try {
+              await api("/api/admin/todos", {
+                method: "PUT",
+                body: JSON.stringify({ id: item.id, completed: false })
+              });
+              await loadTodos();
+              setStatus("待办已恢复到活动列表");
+            } catch (error) {
+              setStatus(error.message, true);
+            }
+          });
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.textContent = "删除";
+          deleteBtn.addEventListener("click", async () => {
+            try {
+              await api("/api/admin/todos", {
+                method: "DELETE",
+                body: JSON.stringify({ id: item.id })
+              });
+              await loadTodos();
+              setStatus("归档待办已删除");
+            } catch (error) {
+              setStatus(error.message, true);
+            }
+          });
+
+          actionTd.appendChild(restoreBtn);
+          actionTd.appendChild(deleteBtn);
+
+          tr.appendChild(stateTd);
+          tr.appendChild(titleTd);
+          tr.appendChild(actionTd);
+          archiveBodyEl.appendChild(tr);
+        }
+      }
+
+      function formatSyncDate(value) {
+        const text = String(value || "").trim();
+        if (!text) {
+          return "-";
+        }
+        const parsed = new Date(text);
+        if (Number.isNaN(parsed.getTime())) {
+          return text;
+        }
+        return new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false
+        }).format(parsed);
+      }
+
       function renderSyncStatus() {
         const el = $("syncStatus");
         const s = state.syncStatus;
         if (!s) {
-          el.textContent = "暂无同步状态";
+          el.innerHTML = '<div class="muted">暂无同步状态</div>';
           return;
         }
-        el.textContent = [
-          "启用同步=" + (Boolean(s.enabled) ? "是" : "否"),
-          "命令路径=" + (s.command || ""),
-          "列表=" + (s.list || "(全部)"),
-          "轮询秒数=" + (s.pollSec || ""),
-          "正在同步=" + (Boolean(s.busy) ? "是" : "否"),
-          "上次同步时间=" + (s.lastSyncAt || ""),
-          "累计同步次数=" + (s.syncCount || 0),
-          "最近错误=" + (s.lastError || "")
+        el.innerHTML = [
+          '<div class="kv"><div>启用同步</div><div>' + (Boolean(s.enabled) ? "是" : "否") + '</div></div>',
+          '<div class="kv"><div>命令路径</div><div class="mono">' + (s.command || "") + '</div></div>',
+          '<div class="kv"><div>列表</div><div>' + (s.list || "(全部)") + '</div></div>',
+          '<div class="kv"><div>轮询秒数</div><div>' + (s.pollSec || "") + '</div></div>',
+          '<div class="kv"><div>正在同步</div><div>' + (Boolean(s.busy) ? "是" : "否") + '</div></div>',
+          '<div class="kv"><div>上次同步时间</div><div>' + formatSyncDate(s.lastSyncAt) + '</div></div>',
+          '<div class="kv"><div>累计同步次数</div><div>' + (s.syncCount || 0) + '</div></div>',
+          '<div class="kv"><div>最近错误</div><div>' + (s.lastError || "-") + '</div></div>'
         ].join("\\n");
+      }
+
+      function renderSyncLists(selectedValue = "") {
+        const select = $("syncList");
+        const hint = $("syncListHint");
+        select.innerHTML = "";
+
+        const allOption = document.createElement("option");
+        allOption.value = "";
+        allOption.textContent = "全部列表";
+        select.appendChild(allOption);
+
+        for (const item of state.syncLists) {
+          const option = document.createElement("option");
+          option.value = item.title;
+          option.textContent = item.title + " (" + (item.reminderCount || 0) + ")";
+          select.appendChild(option);
+        }
+
+        select.value = selectedValue;
+        if (select.value !== selectedValue) {
+          const custom = document.createElement("option");
+          custom.value = selectedValue;
+          custom.textContent = selectedValue ? (selectedValue + "（当前配置）") : "全部列表";
+          select.appendChild(custom);
+          select.value = selectedValue;
+        }
+
+        if (state.syncLists.length === 0) {
+          hint.textContent = "未读取到列表，可留空同步全部列表";
+        } else {
+          hint.textContent = "已读取到 " + state.syncLists.length + " 个列表";
+        }
+      }
+
+      async function loadSyncLists() {
+        const payload = await api("/api/admin/todo-sync/lists");
+        state.syncLists = payload.lists || [];
+        return state.syncLists;
       }
 
       async function loadTodos() {
         const payload = await api("/api/admin/todos");
         state.todos = payload.snapshot?.items || [];
+        state.archiveTodos = payload.snapshot?.archiveItems || [];
         state.selectedTodoId = state.todos.some((item) => item.id === state.selectedTodoId)
           ? state.selectedTodoId
           : (state.todos[0]?.id || "");
         $("todoPath").textContent = "文件：" + (payload.storagePath || "");
         renderTodos();
+        renderArchiveTodos();
       }
 
       async function loadSyncConfig() {
@@ -428,8 +592,13 @@ export function createAdminRoutes(options) {
         const values = payload.values || {};
         $("syncEnabled").checked = values.enabled === true;
         $("syncCmd").value = values.remindctlPath || "";
-        $("syncList").value = values.list || "";
         $("syncPollSec").value = String(values.pollSec || 15);
+        try {
+          await loadSyncLists();
+        } catch {
+          state.syncLists = [];
+        }
+        renderSyncLists(values.list || "");
         state.syncStatus = payload.status || null;
         renderSyncStatus();
       }
@@ -522,7 +691,7 @@ export function createAdminRoutes(options) {
           clearInterval(state.pollingTimer);
         }
         state.pollingTimer = setInterval(() => {
-          if (state.tab === "todos") {
+          if (state.tab === "todos" || state.tab === "archive") {
             void loadTodos().catch(() => {});
           } else if (state.tab === "env" && !state.envDirty) {
             void loadEnv().catch(() => {});
@@ -538,6 +707,7 @@ export function createAdminRoutes(options) {
 
       $("addTodoBtn").addEventListener("click", () => void addTodo().catch((e) => setStatus(e.message, true)));
       $("refreshTodoBtn").addEventListener("click", () => void loadTodos().catch((e) => setStatus(e.message, true)));
+      $("reloadListsBtn").addEventListener("click", () => void loadSyncConfig().catch((e) => setStatus(e.message, true)));
       $("saveSyncBtn").addEventListener("click", () => void saveSyncConfig().catch((e) => setStatus(e.message, true)));
       $("syncNowBtn").addEventListener("click", () => void syncNow().catch((e) => setStatus(e.message, true)));
       $("saveEnvBtn").addEventListener("click", () => void saveEnv().catch((e) => setStatus(e.message, true)));
@@ -561,10 +731,15 @@ export function createAdminRoutes(options) {
         }
         if (command && key === "3") {
           event.preventDefault();
-          switchTab("env");
+          switchTab("archive");
           return;
         }
         if (command && key === "4") {
+          event.preventDefault();
+          switchTab("env");
+          return;
+        }
+        if (command && key === "5") {
           event.preventDefault();
           switchTab("service");
           return;
@@ -692,6 +867,20 @@ export function createAdminRoutes(options) {
     };
   }
 
+  async function getSyncListsApiPayload() {
+    const localConfig = {
+      remindersRemindctlPath: String(config.remindersRemindctlPath || "remindctl"),
+      remindersListName: "",
+      remindersRemindctlTimeoutMs: Number(config.remindersRemindctlTimeoutMs || 20_000)
+    };
+    const client = createRemindctlClient(localConfig);
+    const lists = await client.listReminderLists();
+    return {
+      ok: true,
+      lists: normalizeReminderListOptions(lists)
+    };
+  }
+
   function getAdminEnvPath() {
     const preferred = String(config.cwdConfigPath || config.projectConfigPath || config.userConfigPath || "").trim();
     return preferred || config.userConfigPath;
@@ -762,9 +951,24 @@ export function createAdminRoutes(options) {
       if (req.method === "DELETE") {
         const body = await readJsonBody(req);
         const id = String(body.id || "").trim();
-        todoService.runCommand({ action: "delete", id, index: body.index });
+        const beforeItems = todoService.getAppleLinkedItemsByIds(id ? [id] : []);
+        const deleteResult = todoService.runCommand({ action: "delete", id, index: body.index });
+
+        const deletedItems = Array.isArray(deleteResult?.deletedItems) ? deleteResult.deletedItems : [];
+        const linkedDeletedItems = beforeItems.length > 0
+          ? beforeItems
+          : deletedItems.filter((item) => item?.appleId);
+
+        let remoteDelete = { ok: true, skipped: true, reason: "no_remote_link", deleted: 0, failed: 0, errors: [] };
+        if (linkedDeletedItems.length > 0) {
+          remoteDelete = await deleteTodoRemindersByItems(linkedDeletedItems);
+        }
+
         broadcastTodoState();
-        sendJsonResponse(res, 200, getTodoApiPayload());
+        sendJsonResponse(res, 200, {
+          ...getTodoApiPayload(),
+          remoteDelete
+        });
         return true;
       }
     }
@@ -794,6 +998,12 @@ export function createAdminRoutes(options) {
         });
         return true;
       }
+    }
+
+    if (pathname === "/api/admin/todo-sync/lists" && req.method === "GET") {
+      const payload = await getSyncListsApiPayload();
+      sendJsonResponse(res, 200, payload);
+      return true;
     }
 
     if (pathname === "/api/admin/todo-sync/run" && req.method === "POST") {

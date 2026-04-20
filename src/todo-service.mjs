@@ -57,6 +57,19 @@ function cloneItem(item) {
   };
 }
 
+function splitItemsByCompletion(items) {
+  const activeItems = [];
+  const archiveItems = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    if (item?.completed) {
+      archiveItems.push(item);
+    } else {
+      activeItems.push(item);
+    }
+  }
+  return { activeItems, archiveItems };
+}
+
 function sanitizePersistedState(rawState) {
   const source = rawState && typeof rawState === "object" ? rawState : {};
   const rawItems = Array.isArray(source.items) ? source.items : [];
@@ -231,9 +244,17 @@ export class TodoService {
   }
 
   getSnapshot() {
+    const items = this.items.map(cloneItem);
+    const { activeItems, archiveItems } = splitItemsByCompletion(items);
+    const selectedId = this.items[this.selectedIndex]?.id || "";
+    const matchedIndex = selectedId
+      ? activeItems.findIndex((item) => item.id === selectedId)
+      : -1;
+    const activeSelectedIndex = matchedIndex >= 0 ? matchedIndex : (activeItems.length > 0 ? 0 : -1);
     return {
-      items: this.items.map(cloneItem),
-      selectedIndex: this.selectedIndex,
+      items: activeItems,
+      archiveItems,
+      selectedIndex: activeSelectedIndex,
       lastActionText: this.lastActionText
     };
   }
@@ -596,13 +617,14 @@ export class TodoService {
     return { changed: true, item: cloneItem(item) };
   }
 
-  findByAppleId(appleId) {
-    const normalized = collapseWhitespace(appleId);
-    if (!normalized) {
-      return null;
+  getAppleLinkedItemsByIds(ids) {
+    const idSet = new Set(Array.isArray(ids) ? ids.map((item) => collapseWhitespace(item)) : []);
+    if (idSet.size === 0) {
+      return [];
     }
-    const item = this.items.find((candidate) => candidate.appleId === normalized);
-    return item ? cloneItem(item) : null;
+    return this.items
+      .filter((item) => idSet.has(item.id) && item.appleId)
+      .map(cloneItem);
   }
 
   #loadState() {

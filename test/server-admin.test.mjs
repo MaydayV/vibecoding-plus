@@ -122,7 +122,8 @@ test("admin page and APIs support todo/env editing", async (t) => {
   });
   assert.equal(updateTodoRes.status, 200);
   const updateTodoPayload = await updateTodoRes.json();
-  const updated = updateTodoPayload.snapshot.items.find((item) => item.id === created.id);
+  const updated = updateTodoPayload.snapshot.archiveItems.find((item) => item.id === created.id);
+  assert.equal(updateTodoPayload.snapshot.items.some((item) => item.id === created.id), false);
   assert.equal(updated.title, "管理页编辑后待办");
   assert.equal(updated.completed, true);
 

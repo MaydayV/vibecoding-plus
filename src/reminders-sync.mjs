@@ -51,6 +51,24 @@ function normalizeReminderRow(row) {
   };
 }
 
+function normalizeReminderListRow(row) {
+  if (!row || typeof row !== "object") {
+    return null;
+  }
+  const id = String(row.id || "").trim();
+  const title = String(row.title || row.name || "").trim();
+  if (!id || !title) {
+    return null;
+  }
+
+  return {
+    id,
+    title,
+    reminderCount: Number(row.reminderCount || 0),
+    overdueCount: Number(row.overdueCount || 0)
+  };
+}
+
 function runExecFile(command, args, { timeoutMs = 20_000, cwd = process.cwd() } = {}) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { timeout: timeoutMs, cwd, encoding: "utf8" }, (error, stdout, stderr) => {
@@ -74,6 +92,18 @@ export function createRemindctlClient(config) {
       timeoutMs,
       cwd: process.cwd()
     });
+  }
+
+  async function listReminderLists() {
+    const { stdout } = await run(["lists", "--json"]);
+    let parsed;
+    try {
+      parsed = JSON.parse(stdout || "[]");
+    } catch {
+      throw new Error("remindctl_json_parse_failed");
+    }
+    const rows = Array.isArray(parsed) ? parsed : [];
+    return rows.map(normalizeReminderListRow).filter(Boolean);
   }
 
   async function listReminders() {
@@ -187,6 +217,7 @@ export function createRemindctlClient(config) {
   return {
     command,
     listName,
+    listReminderLists,
     listReminders,
     addReminder,
     editReminder,

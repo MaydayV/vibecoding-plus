@@ -79,6 +79,25 @@ async function runTodoSyncNow(reason = "manual") {
   return result;
 }
 
+async function deleteTodoRemindersByItems(items = []) {
+  if (!remindersSyncController || typeof remindersSyncController.deleteRemoteReminders !== "function") {
+    return { ok: false, skipped: true, reason: "sync_unavailable", deleted: 0, failed: 0, errors: [] };
+  }
+  const appleIds = (Array.isArray(items) ? items : [])
+    .map((item) => String(item?.appleId || "").trim())
+    .filter(Boolean);
+  if (appleIds.length === 0) {
+    return { ok: true, skipped: true, reason: "no_remote_link", deleted: 0, failed: 0, errors: [] };
+  }
+  const result = await remindersSyncController.deleteRemoteReminders(appleIds);
+  if (result?.ok) {
+    setTodoSyncStatus({ lastError: "" });
+  } else if (Array.isArray(result?.errors) && result.errors.length > 0) {
+    setTodoSyncStatus({ lastError: String(result.errors[0].message || "delete_remote_failed") });
+  }
+  return result;
+}
+
 const onTodoChanged = () => {
   broadcastTodoState();
 };
@@ -1121,6 +1140,7 @@ function getTodoSnapshotPayload() {
   return {
     type: "todo_state",
     items: snapshot.items,
+    archiveItems: snapshot.archiveItems || [],
     selectedIndex: snapshot.selectedIndex,
     lastActionText: snapshot.lastActionText
   };
@@ -1229,7 +1249,40 @@ function setPendingTodoIntent(ws, state, pendingIntent) {
   state.pendingTodoTimer.unref?.();
 }
 
-function runTodoCommand(command, { ws = null } = {}) {
+async function runTodoCommand(command, { ws = null } = {}) {
+  const action = String(command?.action || "").trim().toLowerCase();
+  if (action === "delete") {
+    const targetId = String(command?.id || "").trim();
+    const beforeItems = todoService.getAppleLinkedItemsByIds(targetId ? [targetId] : []);
+    try {
+      const result = todoService.runCommand(command);
+      const deletedItems = Array.isArray(result?.deletedItems) ? result.deletedItems : [];
+      const linkedDeletedItems = beforeItems.length > 0
+        ? beforeItems
+        : deletedItems.filter((item) => item?.appleId);
+
+      if (linkedDeletedItems.length > 0) {
+        await deleteTodoRemindersByItems(linkedDeletedItems);
+      }
+
+      broadcastTodoState();
+      if (ws) {
+        sendTodoResult(ws, result);
+      }
+      return result;
+    } catch (error) {
+      const result = {
+        ok: false,
+        action: String(command?.action || "unknown"),
+        message: formatTodoErrorMessage(error)
+      };
+      if (ws) {
+        sendTodoResult(ws, result);
+      }
+      return result;
+    }
+  }
+
   try {
     const result = todoService.runCommand(command);
     broadcastTodoState();
@@ -1270,7 +1323,7 @@ async function dispatchTodoPrompt(ws, prompt, state) {
     });
     return;
   }
-  runTodoCommand(outcome.command, { ws });
+  await runTodoCommand(outcome.command, { ws });
 }
 
 function sendJson(ws, payload) {
@@ -1869,6 +1922,7 @@ const adminRoutes = createAdminRoutes({
   broadcastTodoState,
   getTodoSyncStatus,
   runTodoSyncNow,
+  deleteTodoRemindersByItems,
   shutdown
 });
 
@@ -2135,7 +2189,7 @@ wss.on("connection", (ws, req) => {
           }
           log("todo_command", state.deviceId, action);
           clearPendingTodoIntent(state);
-          runTodoCommand(
+          await runTodoCommand(
             {
               action,
               id: message.id,
