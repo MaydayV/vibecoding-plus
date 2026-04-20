@@ -45,6 +45,7 @@ private:
     std::atomic<bool> connect_attempt_running_{false};
     std::atomic<bool> connect_attempt_completed_{false};
     std::atomic<bool> connect_cancel_requested_{false};
+    std::atomic<bool> manual_reconnect_requested_{false};
     std::atomic<int64_t> connect_attempt_started_ms_{0};
     std::atomic<bool> wifi_reconfigure_restart_pending_{false};
     TaskHandle_t connect_task_handle_ = nullptr;

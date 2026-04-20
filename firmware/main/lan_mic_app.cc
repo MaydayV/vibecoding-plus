@@ -646,6 +646,11 @@ bool LanMicApp::EnsureWebSocketConnected() {
         return true;
     }
 
+    const bool manual_reconnect = manual_reconnect_requested_.exchange(false, std::memory_order_acq_rel);
+    if (manual_reconnect) {
+        server_uri_.clear();
+    }
+
     const char* target_uri = nullptr;
     const char* target_source = "none";
     std::string fallback_server_uri;
@@ -658,7 +663,7 @@ bool LanMicApp::EnsureWebSocketConnected() {
         if (!server_uri_.empty()) {
             target_uri = server_uri_.c_str();
             target_source = "discovery";
-        } else if (!cached_server_uri_.empty()) {
+        } else if (!cached_server_uri_.empty() && !manual_reconnect) {
             target_uri = cached_server_uri_.c_str();
             target_source = "cache";
         }
@@ -667,7 +672,7 @@ bool LanMicApp::EnsureWebSocketConnected() {
     if (!server_uri_.empty()) {
         target_uri = server_uri_.c_str();
         target_source = "configured";
-    } else if (!cached_server_uri_.empty()) {
+    } else if (!cached_server_uri_.empty() && !manual_reconnect) {
         target_uri = cached_server_uri_.c_str();
         target_source = "cache";
     }
@@ -2099,14 +2104,8 @@ void LanMicApp::ExecuteTodoMenuItem(int item) {
     if (todo_menu_kind_ == TodoMenuKind::ReconnectStuck) {
         switch (item) {
             case 0:
-                if (connect_attempt_running_.load(std::memory_order_acquire)) {
-                    status_text_ = "重连卡住";
-                    hint_text_ = "请选择离线或重启";
-                    UpdateDisplay();
-                } else {
-                    CloseTodoMenu();
-                    RequestReconnect("正在重试主机...");
-                }
+                CloseTodoMenu();
+                RequestReconnect("正在重试主机...");
                 return;
             case 1:
                 EnterOfflineTodoMode("离线待办");
@@ -2218,9 +2217,33 @@ void LanMicApp::RequestReconnect(const std::string& message) {
         UpdateDisplay();
         return;
     }
+
+    const bool connect_attempt_running = connect_attempt_running_.load(std::memory_order_acquire);
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    const int64_t connect_attempt_started_ms = connect_attempt_started_ms_.load(std::memory_order_acquire);
+    const bool connect_stuck = connect_attempt_running &&
+                               connect_attempt_started_ms > 0 &&
+                               (now_ms - connect_attempt_started_ms) >= kConnectAttemptWatchdogMs;
+
+    if (connect_attempt_running) {
+        connect_cancel_requested_.store(true, std::memory_order_release);
+        manual_reconnect_requested_.store(true, std::memory_order_release);
+        server_uri_.clear();
+
+        if (connect_stuck && connect_task_handle_ != nullptr) {
+            ESP_LOGW(kTag, "Force abort stuck connect task for manual reconnect");
+            vTaskDelete(connect_task_handle_);
+            connect_task_handle_ = nullptr;
+            connect_attempt_started_ms_.store(0, std::memory_order_release);
+            connect_attempt_running_.store(false, std::memory_order_release);
+            ws_.reset();
+            hello_sent_ = false;
+        }
+    }
+
     if (connect_attempt_running_.load(std::memory_order_acquire)) {
-        status_text_ = "重连中";
-        hint_text_ = "请等待，卡住可重启";
+        status_text_ = "重试中";
+        hint_text_ = "正在取消旧连接...";
         UpdateDisplay();
         return;
     }
@@ -2228,7 +2251,11 @@ void LanMicApp::RequestReconnect(const std::string& message) {
     if (IsServerConnected()) {
         DisconnectWebSocket();
     }
+
+    manual_reconnect_requested_.store(true, std::memory_order_release);
+    server_uri_.clear();
     offline_todo_mode_ = false;
+    reconnect_stuck_prompt_ = false;
     network_state_ = NetworkState::Wifi;
     status_text_ = "连接中";
     hint_text_ = message;
