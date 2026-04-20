@@ -174,10 +174,10 @@ export function createAdminRoutes(options) {
       <div id="status" class="muted"></div>
 
       <div class="tabs" id="tabs">
-        <button class="tab active" data-tab="todos">Todo</button>
-        <button class="tab" data-tab="sync">Sync</button>
-        <button class="tab" data-tab="env">ENV</button>
-        <button class="tab" data-tab="service">Service</button>
+        <button class="tab active" data-tab="todos">待办</button>
+        <button class="tab" data-tab="sync">苹果同步</button>
+        <button class="tab" data-tab="env">环境变量</button>
+        <button class="tab" data-tab="service">服务</button>
       </div>
 
       <section id="panel-todos" class="panel active">
@@ -402,14 +402,14 @@ export function createAdminRoutes(options) {
           return;
         }
         el.textContent = [
-          "enabled=" + Boolean(s.enabled),
-          "command=" + (s.command || ""),
-          "list=" + (s.list || "(all)"),
-          "pollSec=" + (s.pollSec || ""),
-          "busy=" + Boolean(s.busy),
-          "lastSyncAt=" + (s.lastSyncAt || ""),
-          "syncCount=" + (s.syncCount || 0),
-          "lastError=" + (s.lastError || "")
+          "启用同步=" + (Boolean(s.enabled) ? "是" : "否"),
+          "命令路径=" + (s.command || ""),
+          "列表=" + (s.list || "(全部)"),
+          "轮询秒数=" + (s.pollSec || ""),
+          "正在同步=" + (Boolean(s.busy) ? "是" : "否"),
+          "上次同步时间=" + (s.lastSyncAt || ""),
+          "累计同步次数=" + (s.syncCount || 0),
+          "最近错误=" + (s.lastError || "")
         ].join("\\n");
       }
 
