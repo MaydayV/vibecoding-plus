@@ -1415,6 +1415,11 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
             display_->SetInverted(display_dark_style_);
         }
     } else if (strcmp(type, "mode_state") == 0) {
+        const char* mode = GetJsonString(root, "mode");
+        if (mode != nullptr) {
+            voice_mode_ = strcmp(mode, "todo") == 0 ? VoiceMode::Todo : VoiceMode::Normal;
+        }
+    } else if (strcmp(type, "todo_state") == 0) {
 
         cJSON* items = cJSON_GetObjectItemCaseSensitive(root, "items");
         cJSON* selected_index = cJSON_GetObjectItemCaseSensitive(root, "selectedIndex");
