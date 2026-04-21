@@ -2911,11 +2911,11 @@ void LanMicApp::UpdateDisplay() {
             }
         } else {
             constexpr int kTodoHeaderBottomY = 95;
-            constexpr int kTodoRowStartY = 106;
-            constexpr int kTodoRowHeight = 30;
+            constexpr int kTodoRowStartY = 100;
+            constexpr int kTodoRowHeight = 26;
             constexpr int kTodoCheckboxX = 14;
             constexpr int kTodoTimeX = 286;
-            constexpr int kTodoRowsVisible = 5;
+            constexpr int kTodoRowsVisible = 6;
 
             tm todo_tm = {};
             bool has_time = false;

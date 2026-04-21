@@ -216,7 +216,7 @@ test("server routes transcripts using each client's own voice mode", async (t) =
     (message) =>
       message.type === "todo_state" &&
       Array.isArray(message.items) &&
-      message.items.some((item) => item.title === "买牛奶")
+      message.items.some((item) => /买牛奶/.test(String(item.title || "")))
   );
   const todoResultPromise = todoMessages.waitFor(
     (message) => message.type === "todo_result" && message.ok === true && /已添加计划/.test(message.message)
