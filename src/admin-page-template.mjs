@@ -227,7 +227,7 @@ export function buildAdminPageTemplate() {
           </div>
           <div class="row" style="margin-top:10px;">
             <button id="saveDisplayBtn" class="primary">设置显示模式</button>
-            <button id="refreshDisplayBtn">刷新</button>
+            <button id="refreshDisplayBtn">读取当前显示设置</button>
           </div>
         </div>
       </section>
