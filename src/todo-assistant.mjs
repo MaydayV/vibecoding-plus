@@ -1,4 +1,4 @@
-import { parseTodoVoiceCommand } from "./todo-service.mjs";
+import { parseTodoVoiceCommand, formatTodoDueShort } from "./todo-service.mjs";
 
 const TODO_ACTIONS = new Set(["list", "create", "update", "delete", "clear", "toggle"]);
 const CHINESE_DIGITS = new Map([
@@ -180,6 +180,79 @@ function inferCompletedFromPayload(payload) {
   return undefined;
 }
 
+function parseFollowupDueAt(text) {
+  const normalized = collapseWhitespace(text);
+  if (!normalized) {
+    return "";
+  }
+  const now = new Date();
+  const minuteMatch = normalized.match(/(\d{1,2})[:：点](\d{1,2})/u);
+  const hourOnlyMatch = minuteMatch ? null : normalized.match(/(\d{1,2})点(?:整)?/u);
+  const amHint = /上午|早上|清晨/u.test(normalized);
+  const pmHint = /下午|今晚|晚上|夜里|傍晚/u.test(normalized);
+  const tomorrowHint = /明天/u.test(normalized);
+  const dayAfterHint = /后天/u.test(normalized);
+
+  if (!minuteMatch && !hourOnlyMatch) {
+    return "";
+  }
+
+  let hour = 0;
+  let minute = 0;
+  if (minuteMatch) {
+    hour = Number.parseInt(minuteMatch[1], 10);
+    minute = Number.parseInt(minuteMatch[2], 10);
+  } else if (hourOnlyMatch) {
+    hour = Number.parseInt(hourOnlyMatch[1], 10);
+  }
+
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+    return "";
+  }
+
+  if (pmHint && hour >= 1 && hour <= 11) {
+    hour += 12;
+  }
+  if (amHint && hour === 12) {
+    hour = 0;
+  }
+
+  const due = new Date(now);
+  due.setSeconds(0, 0);
+  due.setHours(hour, minute, 0, 0);
+  if (tomorrowHint) {
+    due.setDate(due.getDate() + 1);
+  } else if (dayAfterHint) {
+    due.setDate(due.getDate() + 2);
+  } else if (due.getTime() < now.getTime() - 60_000) {
+    due.setDate(due.getDate() + 1);
+  }
+  return due.toISOString();
+}
+
+function normalizeDueAt(value) {
+  const text = collapseWhitespace(value);
+  if (!text) {
+    return "";
+  }
+  const timestamp = Date.parse(text);
+  if (Number.isFinite(timestamp)) {
+    return new Date(timestamp).toISOString();
+  }
+  return parseFollowupDueAt(text);
+}
+
+function normalizeModelDueAtFields(payload) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  const direct = collapseWhitespace(payload.dueAt || payload.due_at || payload.time || payload.datetime || payload.dateTime || "");
+  if (direct) {
+    return normalizeDueAt(direct);
+  }
+  return parseFollowupDueAt(normalizeModelTextFields(payload));
+}
+
 function normalizeLlmPayloadShape(payload) {
   if (!payload || typeof payload !== "object") {
     return payload;
@@ -190,18 +263,26 @@ function normalizeLlmPayloadShape(payload) {
   normalized.action = normalizeActionAlias(rawAction);
   normalized.text = normalizeModelTextFields(normalized);
   normalized.index = normalizeModelIndexFields(normalized);
+  normalized.dueAt = normalizeModelDueAtFields(normalized);
   normalized.completed = inferCompletedFromPayload({ ...normalized, action: rawAction });
 
   if (normalized.type === "ask" && (!normalized.pending || typeof normalized.pending !== "object")) {
     const pendingAction = TODO_ACTIONS.has(normalized.action) ? normalized.action : "create";
-    const missing = normalized.text ? "index" : "text";
-    normalized.pending = { action: pendingAction, missing, index: normalized.index, completed: normalized.completed };
+    const missing = pendingAction === "create"
+      ? (!normalized.text ? "text" : "dueAt")
+      : (normalized.text ? "index" : "text");
+    normalized.pending = {
+      action: pendingAction,
+      missing,
+      index: normalized.index,
+      completed: normalized.completed,
+      text: normalized.text,
+      dueAt: normalized.dueAt
+    };
   }
 
   return normalized;
 }
-
-
 
 function isCancelText(text) {
   return /^(?:取消|算了|不用了|停止|退出)$/iu.test(collapseWhitespace(text));
@@ -236,7 +317,11 @@ function commandResult(command, source = "rules") {
 
 function parseExplicitFollowup(text) {
   const normalized = collapseWhitespace(text);
-  if (/^(?:添加(?:一个)?|新增|增加|加一个)(?:计划|待办|todo)?$/iu.test(normalized)) {
+  if (!normalized) {
+    return null;
+  }
+
+  if (/^(?:添加|新增)(?:计划|待办|todo)?$/iu.test(normalized)) {
     return askResult("计划内容是什么？", { action: "create", missing: "text" });
   }
 
@@ -286,10 +371,32 @@ function resolvePendingIntent(pendingIntent, text) {
     if (!normalized) {
       return askResult("计划内容是什么？", pendingIntent);
     }
+    const parsedDueAt = action === "create" ? parseFollowupDueAt(normalized) : "";
+    if (action === "create" && !parsedDueAt) {
+      return askResult("提醒时间是什么？例如 明天早上9点", {
+        ...pendingIntent,
+        text: normalized,
+        missing: "dueAt"
+      });
+    }
     return commandResult({
       action,
       index: pendingIntent.index,
       text: normalized,
+      completed: pendingIntent.completed
+    });
+  }
+
+  if (pendingIntent.missing === "dueat" || pendingIntent.missing === "dueAt") {
+    const parsedDueAt = parseFollowupDueAt(normalized);
+    if (!parsedDueAt) {
+      return askResult("请说提醒时间，例如 明天晚上8点", pendingIntent);
+    }
+    return commandResult({
+      action,
+      index: pendingIntent.index,
+      text: collapseWhitespace(pendingIntent.text),
+      dueAt: parsedDueAt,
       completed: pendingIntent.completed
     });
   }
@@ -314,13 +421,14 @@ function buildSystemPrompt() {
     "你只负责把中文口语解析成结构化命令，不要执行命令。",
     "支持的 action 只有 list, create, update, delete, clear, toggle。",
     "如果用户只是查看待办，输出 {\"type\":\"command\",\"action\":\"list\"}。",
-    "如果用户想新增待办，输出 {\"type\":\"command\",\"action\":\"create\",\"text\":\"待办内容\"}。",
+    "如果用户想新增待办，输出 {\"type\":\"command\",\"action\":\"create\",\"text\":\"待办内容\",\"dueAt\":\"ISO时间\"}。",
     "如果用户想删除全部或清空待办，输出 {\"type\":\"command\",\"action\":\"clear\"}。",
     "如果用户想修改、删除、完成或取消完成某条待办，必须给出 1-based index；没有序号就输出 ask。",
+    "create 必须包含 dueAt；如果缺少时间，输出 ask，pending.missing=dueAt，并带上 pending.text。",
     "如果用户只说添加/新增但没有内容，输出 {\"type\":\"ask\",\"question\":\"计划内容是什么？\",\"pending\":{\"action\":\"create\",\"missing\":\"text\"}}。",
     "如果缺少序号，pending.missing 必须是 index；如果缺少新内容，pending.missing 必须是 text。",
     "toggle 的 completed 为 true 表示完成，false 表示取消完成。",
-    "现在只做待办，不做提醒、日历、时间调度；带时间的事项也只能作为普通待办标题。",
+    "现在只做待办，不做提醒、日历、时间调度；时间仅作为待办 dueAt 字段。",
     "输出 JSON 形状只能是 command、ask 或 unsupported。"
   ].join("\n");
 }
@@ -328,7 +436,7 @@ function buildSystemPrompt() {
 function buildUserPrompt(text, snapshot) {
   const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
   const itemLines = items.length
-    ? items.map((item, index) => `${index + 1}. [${item.completed ? "x" : " "}] ${item.title}`).join("\n")
+    ? items.map((item, index) => `${index + 1}. [${item.completed ? "x" : " "}] ${item.title}${item.dueAt ? ` (${formatTodoDueShort(item.dueAt)})` : ""}`).join("\n")
     : "空";
   const selectedIndex = Number.isInteger(snapshot?.selectedIndex) ? snapshot.selectedIndex + 1 : null;
 
@@ -359,14 +467,16 @@ function normalizeLlmPending(pending) {
     return null;
   }
   const action = collapseWhitespace(pending.action).toLowerCase();
-  const missing = collapseWhitespace(pending.missing).toLowerCase();
-  if (!TODO_ACTIONS.has(action) || !(missing === "text" || missing === "index")) {
+  const missing = collapseWhitespace(pending.missing);
+  if (!TODO_ACTIONS.has(action) || !(missing === "text" || missing === "index" || missing === "dueAt" || missing === "dueat")) {
     return null;
   }
   return {
     action,
     missing,
     index: normalizeIndex(pending.index) || undefined,
+    text: collapseWhitespace(pending.text),
+    dueAt: collapseWhitespace(pending.dueAt),
     completed: normalizeOptionalBoolean(pending.completed)
   };
 }
@@ -407,11 +517,16 @@ function normalizeLlmCommand(payload) {
 
   const text = collapseWhitespace(normalizedPayload.text);
   const index = normalizeIndex(normalizedPayload.index);
+  const dueAt = parseFollowupDueAt(normalizedPayload.dueAt);
   const completed = normalizeOptionalBoolean(normalizedPayload.completed);
   if (action === "create") {
-    return text
-      ? commandResult({ action, text }, "deepseek")
-      : askResult("计划内容是什么？", { action, missing: "text" });
+    if (!text) {
+      return askResult("计划内容是什么？", { action, missing: "text" });
+    }
+    if (!dueAt) {
+      return askResult("提醒时间是什么？例如 明天早上9点", { action, missing: "dueAt", text });
+    }
+    return commandResult({ action, text, dueAt }, "deepseek");
   }
 
   if (!index) {
@@ -464,6 +579,13 @@ export class TodoAssistant {
 
     const localCommand = parseTodoVoiceCommand(normalized);
     if (localCommand.ok) {
+      if (localCommand.action === "create" && !localCommand.dueAt) {
+        return askResult("提醒时间是什么？例如 明天早上9点", {
+          action: "create",
+          missing: "dueAt",
+          text: collapseWhitespace(localCommand.text)
+        });
+      }
       return commandResult(localCommand);
     }
 

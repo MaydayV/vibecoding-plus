@@ -161,7 +161,7 @@ test("server routes transcripts using each client's own voice mode", async (t) =
       LAN_DISCOVERY_ENABLED: "0",
       LAN_VOICE_BIND: "127.0.0.1",
       LAN_VOICE_PORT: String(port),
-      MOCK_TRANSCRIPT: "添加计划 买牛奶",
+      MOCK_TRANSCRIPT: "添加计划 明天早上9点买牛奶",
       SEND_TARGET: "text_injector",
       DRY_RUN_TEXT_INJECTION: "1",
       TODO_INTENT_PROVIDER: "rules",

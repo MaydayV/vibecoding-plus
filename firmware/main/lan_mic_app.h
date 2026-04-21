@@ -81,6 +81,7 @@ private:
         std::string id;
         std::string title;
         bool completed = false;
+        std::string due_at;
     };
     enum class PendingTodoOpType {
         Toggle,
@@ -231,6 +232,8 @@ private:
     void UpdateLed();
     void PlayBeep(int freq_hz, int duration_ms);
     void DrawHorizontalLine(int y, int thickness = 1);
+    void DrawTodoDashLine(int y, int x_start, int x_end);
+    void DrawTodoHeaderIcon(int x, int y);
     void DrawWifiIcon(int x, int y);
     void DrawBatteryIcon(int x, int y, int level, bool charging);
     void UpdateDisplay();

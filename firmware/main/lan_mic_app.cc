@@ -15,6 +15,8 @@
 #include <cerrno>
 #include <cstring>
 #include <cstdio>
+#include <ctime>
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -22,10 +24,12 @@
 
 #include "board.h"
 #include "boards/zectrix-s3-epaper-4.2/config.h"
+#include "boards/zectrix-s3-epaper-4.2/rtc_pcf8563.h"
 
 #include "boards/zectrix/zectrix_nfc.h"
 extern "C" void ZectrixSetFactoryLedOverride(bool enabled, bool blink);
 extern "C" ZectrixNfc* __attribute__((weak)) ZectrixGetNfc();
+extern "C" RtcPcf8563* __attribute__((weak)) ZectrixGetRtc();
 #include "display.h"
 #include "network_interface.h"
 #include "settings.h"
@@ -127,6 +131,54 @@ constexpr uint8_t kBatteryIcon14x8[] = {
     0x80, 0x04,
     0xFF, 0xFC,
 };
+
+
+std::string FormatTwoDigits(int value) {
+    if (value < 0) {
+        value = 0;
+    }
+    if (value > 99) {
+        value = value % 100;
+    }
+    char buffer[4];
+    snprintf(buffer, sizeof(buffer), "%02d", value);
+    return std::string(buffer);
+}
+
+std::string FormatTodoClockText(const tm& local_tm) {
+    return FormatTwoDigits(local_tm.tm_hour) + ":" + FormatTwoDigits(local_tm.tm_min);
+}
+
+std::string FormatTodoDateText(const tm& local_tm) {
+    static const char* kWeekdaysCn[] = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
+    const int wday = (local_tm.tm_wday >= 0 && local_tm.tm_wday <= 6) ? local_tm.tm_wday : 0;
+    return FormatTwoDigits(local_tm.tm_mon + 1) + "/" +
+           FormatTwoDigits(local_tm.tm_mday) + " " +
+           kWeekdaysCn[wday];
+}
+
+std::string FormatTodoRightTimeText(const std::string& due_at) {
+    if (due_at.empty()) {
+        return "--:--";
+    }
+
+    std::string text = due_at;
+    const size_t t_pos = text.find('T');
+    if (t_pos == std::string::npos || t_pos + 6 > text.size()) {
+        return "--:--";
+    }
+
+    const std::string hh = text.substr(t_pos + 1, 2);
+    const std::string mm = text.substr(t_pos + 4, 2);
+    if (!std::isdigit(static_cast<unsigned char>(hh[0])) ||
+        !std::isdigit(static_cast<unsigned char>(hh[1])) ||
+        !std::isdigit(static_cast<unsigned char>(mm[0])) ||
+        !std::isdigit(static_cast<unsigned char>(mm[1]))) {
+        return "--:--";
+    }
+
+    return hh + ":" + mm;
+}
 
 std::vector<std::string> WrapUtf8Lines(const std::string& text, size_t max_chars, size_t max_lines = 0) {
     std::vector<std::string> lines;
@@ -1363,7 +1415,8 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
                 todo_items_.push_back({
                     id != nullptr ? id : "",
                     title,
-                    GetJsonBool(item, "completed", false)
+                    GetJsonBool(item, "completed", false),
+                    GetJsonString(item, "dueAt") != nullptr ? GetJsonString(item, "dueAt") : ""
                 });
             }
         }
@@ -1819,7 +1872,8 @@ void LanMicApp::LoadCachedTodoState() {
             cached_items.push_back({
                 id != nullptr ? id : "",
                 title,
-                GetJsonBool(item, "completed", false)
+                GetJsonBool(item, "completed", false),
+                GetJsonString(item, "dueAt") != nullptr ? GetJsonString(item, "dueAt") : ""
             });
         }
     }
@@ -1865,6 +1919,9 @@ void LanMicApp::SaveCachedTodoState() {
         cJSON_AddStringToObject(item, "id", todo.id.c_str());
         cJSON_AddStringToObject(item, "title", todo.title.c_str());
         cJSON_AddBoolToObject(item, "completed", todo.completed);
+        if (!todo.due_at.empty()) {
+            cJSON_AddStringToObject(item, "dueAt", todo.due_at.c_str());
+        }
         cJSON_AddItemToArray(items, item);
     }
     cJSON_AddItemToObject(root, "items", items);
@@ -2425,7 +2482,7 @@ void LanMicApp::ShowIdleTodoPage() {
 
 std::string LanMicApp::GetFooterText() const {
     if (has_pending_transcript_) {
-        return "BOOT追加 | UP发送 | DN撤销";
+        return "BOOT追加 | ↑发送 | ↓撤销";
     }
     if (phase_ == Phase::Recording) {
         return "松开 BOOT 停止";
@@ -2434,24 +2491,24 @@ std::string LanMicApp::GetFooterText() const {
         return "连接 AP 后打开 192.168.4.1";
     }
     if (todo_menu_open_) {
-        return "UP/DN 菜单 | BOOT 确认";
+        return "↑/↓ 菜单 | BOOT 确认";
     }
     if (active_page_ == Page::Settings) {
-        return settings_editing_volume_ ? "UP/DN ±10 | BOOT 保存"
-                                        : "UP/DN 导航 | BOOT 确认 | 长按UP返回";
+        return settings_editing_volume_ ? "↑/↓ ±10 | BOOT 保存"
+                                        : "↑/↓ 导航 | BOOT 确认 | 长按↑返回";
     }
     if (active_page_ == Page::Summary) {
         if (!plan_options_.empty()) {
-            return "UP/DN 选方案 | BOOT 应用";
+            return "↑/↓ 选方案 | BOOT 应用";
         }
-        return "长按UP菜单 | 长按编程语音";
+        return "长按↑菜单 | 长按输入/短按回车";
     }
     if (active_page_ == Page::Todo) {
         return IsServerConnected()
-            ? "长按UP菜单 | 长按待办语音"
-            : "长按UP菜单 | UP/DN 选择";
+            ? "长按↑菜单 | 长按添加/短按完成"
+            : "长按↑菜单 | ↑/↓ 选择";
     }
-    return "UP/DN 滚动 | 长按UP | 长按DN设置";
+    return "↑/↓ 滚动 | 长按↑ | 长按↓设置";
 }
 
 std::string LanMicApp::BuildPromptBody() const {
@@ -2490,8 +2547,8 @@ std::string LanMicApp::BuildPromptBody() const {
     switch (network_state_) {
         case NetworkState::Server:
             return active_page_ == Page::Todo
-                ? "待办语音模式\n长按UP打开菜单"
-                : "编程模式\n长按UP打开菜单";
+                ? "待办语音模式\n长按↑打开菜单"
+                : "编程模式\n长按↑打开菜单";
         case NetworkState::Wifi:
             return "正在查找服务器...";
         case NetworkState::Config:
@@ -2592,6 +2649,72 @@ void LanMicApp::DrawHorizontalLine(int y, int thickness) {
     display_->WriteRaw1bpp(0, y, width, thickness, buffer.data(), buffer.size());
 }
 
+void LanMicApp::DrawTodoDashLine(int y, int x_start, int x_end) {
+    if (display_ == nullptr || y < 0 || y >= display_->height()) {
+        return;
+    }
+    if (x_end <= x_start) {
+        return;
+    }
+    const int width = x_end - x_start;
+    if (width <= 0) {
+        return;
+    }
+    const int bytes_per_row = (width + 7) / 8;
+    std::vector<uint8_t> row_bytes(bytes_per_row, 0x00);
+    for (int x = 0; x < width; ++x) {
+        const bool draw = (x % 8) < 5;
+        if (!draw) {
+            continue;
+        }
+        const int bit_index = x;
+        row_bytes[bit_index >> 3] |= static_cast<uint8_t>(1U << (7 - (bit_index & 7)));
+    }
+    display_->WriteRaw1bpp(x_start, y, width, 1, row_bytes.data(), row_bytes.size());
+}
+
+void LanMicApp::DrawTodoHeaderIcon(int x, int y) {
+    if (display_ == nullptr) {
+        return;
+    }
+    constexpr int w = 16;
+    constexpr int h = 16;
+    constexpr int bytes_per_row = (w + 7) / 8;
+    std::vector<uint8_t> buffer(bytes_per_row * h, 0x00);
+
+    auto set_pixel = [&](int px, int py) {
+        if (px < 0 || px >= w || py < 0 || py >= h) {
+            return;
+        }
+        const int bit_index = py * w + px;
+        buffer[bit_index >> 3] |= static_cast<uint8_t>(1U << (7 - (bit_index & 7)));
+    };
+
+    for (int px = 2; px <= 13; ++px) {
+        set_pixel(px, 2);
+        set_pixel(px, 13);
+    }
+    for (int py = 3; py <= 12; ++py) {
+        set_pixel(2, py);
+        set_pixel(13, py);
+    }
+    for (int px = 5; px <= 10; ++px) {
+        set_pixel(px, 1);
+    }
+    set_pixel(5, 2);
+    set_pixel(10, 2);
+
+    for (int py = 5; py <= 10; py += 2) {
+        set_pixel(5, py);
+        set_pixel(6, py);
+        for (int px = 8; px <= 11; ++px) {
+            set_pixel(px, py);
+        }
+    }
+
+    display_->WriteRaw1bpp(x, y, w, h, buffer.data(), buffer.size());
+}
+
 void LanMicApp::DrawWifiIcon(int x, int y) {
     if (display_ == nullptr) {
         return;
@@ -2673,8 +2796,10 @@ void LanMicApp::UpdateDisplay() {
                            : render_page == Page::Todo    ? "待办"
                            : render_page == Page::Log     ? "日志"
                            :                               "设置";
-    texts.push_back({single_line(repo_name_.empty() ? "Codex" : repo_name_, 18), 12, kContentHeaderY, 16});
-    texts.push_back({page_label, 316, kContentHeaderY, 16});
+    if (render_page != Page::Todo) {
+        texts.push_back({single_line(repo_name_.empty() ? "Codex" : repo_name_, 18), 12, kContentHeaderY, 16});
+        texts.push_back({page_label, 316, kContentHeaderY, 16});
+    }
 
     if (render_page == Page::Summary) {
         if (todo_menu_open_ && todo_menu_kind_ == TodoMenuKind::Live) {
@@ -2729,15 +2854,15 @@ void LanMicApp::UpdateDisplay() {
             }
         }
     } else if (render_page == Page::Todo) {
-        texts.push_back({todo_menu_open_ ? "待办菜单" : "待办", 12, kLogTitleY, 16});
-        std::string todo_status = todo_last_action_text_.empty() ? GetModeLabel() : todo_last_action_text_;
-        if (!pending_todo_ops_.empty()) {
-            todo_status = "待同步 " + std::to_string(pending_todo_ops_.size());
-        }
-        texts.push_back({single_line(todo_status, 16), 228, kLogTitleY, 16});
-
-        std::vector<std::string> rows;
         if (todo_menu_open_) {
+            texts.push_back({"待办菜单", 12, kLogTitleY, 16});
+            std::string todo_status = todo_last_action_text_.empty() ? GetModeLabel() : todo_last_action_text_;
+            if (!pending_todo_ops_.empty()) {
+                todo_status = "待同步 " + std::to_string(pending_todo_ops_.size());
+            }
+            texts.push_back({single_line(todo_status, 16), 228, kLogTitleY, 16});
+
+            std::vector<std::string> rows;
             if (todo_menu_kind_ == TodoMenuKind::ReconnectStuck) {
                 rows.push_back("重连卡住");
             } else if (todo_menu_kind_ == TodoMenuKind::TodoAction) {
@@ -2753,35 +2878,64 @@ void LanMicApp::UpdateDisplay() {
                 row += GetTodoMenuItemLabel(index);
                 rows.push_back(single_line(row, kBodyCharsPerLine));
             }
-        } else if (todo_items_.empty()) {
-            rows.push_back("暂无计划");
-            rows.push_back(IsServerConnected() ? "长按UP打开菜单" : "离线缓存为空");
-            rows.push_back(GetModeLabel());
-        } else {
-            const int visible_lines = static_cast<int>(kLogVisibleLines);
-            const int max_start = std::max(0, static_cast<int>(todo_items_.size()) - visible_lines);
-            const int start_index = std::clamp(
-                todo_selected_index_ < 0 ? 0 : todo_selected_index_ - (visible_lines / 2),
-                0,
-                max_start);
-            const int end_index = std::min(
-                static_cast<int>(todo_items_.size()),
-                start_index + visible_lines);
-            for (int index = start_index; index < end_index; ++index) {
-                const auto& item = todo_items_[index];
-                std::string row = (index == todo_selected_index_) ? ">" : " ";
-                row += std::to_string(index + 1);
-                row += ".";
-                row += item.completed ? "[x] " : "[ ] ";
-                row += item.title;
-                rows.push_back(single_line(row, kBodyCharsPerLine));
-            }
-        }
 
-        int y = kLogBodyY;
-        for (const auto& line : rows) {
-            texts.push_back({line, 12, y, 16});
-            y += kLineHeight;
+            int y = kLogBodyY;
+            for (const auto& line : rows) {
+                texts.push_back({line, 12, y, 16});
+                y += kLineHeight;
+            }
+        } else {
+            constexpr int kTodoHeaderBottomY = 95;
+            constexpr int kTodoRowStartY = 106;
+            constexpr int kTodoRowHeight = 30;
+            constexpr int kTodoCheckboxX = 14;
+            constexpr int kTodoTimeX = 286;
+            constexpr int kTodoRowsVisible = 5;
+
+            tm todo_tm = {};
+            bool has_time = false;
+            RtcPcf8563* rtc = ZectrixGetRtc();
+            if (rtc != nullptr) {
+                has_time = rtc->GetTime(todo_tm);
+            }
+
+            DrawTodoHeaderIcon(12, 43);
+            texts.push_back({has_time ? FormatTodoClockText(todo_tm) : "--:--", 38, 42, 24});
+            texts.push_back({has_time ? FormatTodoDateText(todo_tm) : "--/-- --", 254, 45, 16});
+            DrawHorizontalLine(kTodoHeaderBottomY, 1);
+
+            if (todo_items_.empty()) {
+                texts.push_back({"□ 暂无待办", 12, 118, 16});
+                texts.push_back({IsServerConnected() ? "长按↑打开菜单" : "离线缓存为空", 12, 138, 16});
+                texts.push_back({GetModeLabel(), 12, 158, 16});
+            } else {
+                const int max_start = std::max(0, static_cast<int>(todo_items_.size()) - kTodoRowsVisible);
+                const int start_index = std::clamp(
+                    todo_selected_index_ < 0 ? 0 : todo_selected_index_ - (kTodoRowsVisible / 2),
+                    0,
+                    max_start);
+                const int end_index = std::min(
+                    static_cast<int>(todo_items_.size()),
+                    start_index + kTodoRowsVisible);
+
+                int row_slot = 0;
+                for (int index = start_index; index < end_index; ++index, ++row_slot) {
+                    const auto& item = todo_items_[index];
+                    const int row_y = kTodoRowStartY + (row_slot * kTodoRowHeight);
+                    const bool selected = index == todo_selected_index_;
+                    const std::string checkbox = item.completed ? "■" : "□";
+                    std::string left = checkbox + " ";
+                    if (selected) {
+                        left += ">";
+                    }
+                    left += single_line(item.title, 16);
+                    texts.push_back({left, kTodoCheckboxX, row_y, 16});
+
+                    std::string right_text = FormatTodoRightTimeText(item.due_at);
+                    texts.push_back({right_text, kTodoTimeX, row_y, 16});
+                    DrawTodoDashLine(row_y + 20, 12, 372);
+                }
+            }
         }
     } else if (render_page == Page::Log) {
         texts.push_back({"日志", 12, kLogTitleY, 16});
@@ -2809,7 +2963,7 @@ void LanMicApp::UpdateDisplay() {
         // Settings page
         texts.push_back({"设置", 12, kLogTitleY, 16});
         if (settings_editing_volume_) {
-            texts.push_back({"UP/DN ±10 BOOT 确认", 180, kLogTitleY, 14});
+            texts.push_back({"↑/↓ ±10 BOOT 确认", 180, kLogTitleY, 14});
         }
 
         // Menu items

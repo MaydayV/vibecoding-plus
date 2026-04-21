@@ -116,6 +116,7 @@ export function createTodoRemindersSync(options) {
         appleId: reminder.id,
         title: reminder.title,
         completed: false,
+        dueDate: reminder.dueDate,
         updatedAt: reminder.updatedAt
       });
       if (result.changed) {

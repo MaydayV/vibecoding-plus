@@ -39,6 +39,57 @@ function normalizeTimestamp(value, fallback = "") {
   return new Date(timestamp).toISOString();
 }
 
+function parseLooseDueAt(text) {
+  const input = collapseWhitespace(text);
+  if (!input) {
+    return "";
+  }
+
+  const now = new Date();
+  const minuteMatch = input.match(/(\d{1,2})[:：点](\d{1,2})/u);
+  const hourOnlyMatch = minuteMatch ? null : input.match(/(\d{1,2})点(?:整)?/u);
+  const amHint = /上午|早上|清晨/u.test(input);
+  const pmHint = /下午|今晚|晚上|夜里|傍晚/u.test(input);
+  const tomorrowHint = /明天/u.test(input);
+  const dayAfterHint = /后天/u.test(input);
+
+  if (!minuteMatch && !hourOnlyMatch) {
+    return "";
+  }
+
+  let hour = 0;
+  let minute = 0;
+  if (minuteMatch) {
+    hour = Number.parseInt(minuteMatch[1], 10);
+    minute = Number.parseInt(minuteMatch[2], 10);
+  } else if (hourOnlyMatch) {
+    hour = Number.parseInt(hourOnlyMatch[1], 10);
+    minute = 0;
+  }
+
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+    return "";
+  }
+
+  if (pmHint && hour >= 1 && hour <= 11) {
+    hour += 12;
+  }
+  if (amHint && hour === 12) {
+    hour = 0;
+  }
+
+  const due = new Date(now);
+  due.setSeconds(0, 0);
+  due.setHours(hour, minute, 0, 0);
+  if (tomorrowHint) {
+    due.setDate(due.getDate() + 1);
+  } else if (dayAfterHint) {
+    due.setDate(due.getDate() + 2);
+  } else if (due.getTime() < now.getTime() - 60_000) {
+    due.setDate(due.getDate() + 1);
+  }
+  return due.toISOString();
+}
 function timestampMs(value) {
   const ms = Date.parse(String(value || ""));
   return Number.isFinite(ms) ? ms : 0;
@@ -51,6 +102,7 @@ function cloneItem(item) {
     completed: Boolean(item.completed),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
+    dueAt: item.dueAt || "",
     appleId: item.appleId || "",
     source: item.source || "local",
     syncUpdatedAt: item.syncUpdatedAt || item.updatedAt
@@ -88,12 +140,15 @@ function sanitizePersistedState(rawState) {
       const updatedAt = normalizeTimestamp(item.updatedAt, createdAt);
       const syncUpdatedAt = normalizeTimestamp(item.syncUpdatedAt, updatedAt);
 
+      const dueAt = normalizeTimestamp(item.dueAt, "");
+
       return {
         id: collapseWhitespace(item.id) || randomUUID(),
         title,
         completed: Boolean(item.completed),
         createdAt,
         updatedAt,
+        dueAt,
         appleId: collapseWhitespace(item.appleId),
         source: collapseWhitespace(item.source) || "local",
         syncUpdatedAt
@@ -124,6 +179,7 @@ function createDefaultTodoState() {
       completed: false,
       createdAt: now,
       updatedAt: now,
+      dueAt: "",
       appleId: "",
       source: "seed",
       syncUpdatedAt: now
@@ -138,6 +194,27 @@ function writeJsonAtomic(filePath, payload) {
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(tempPath, payload, "utf8");
   fs.renameSync(tempPath, filePath);
+}
+
+export function formatTodoDueShort(value) {
+  const iso = normalizeTimestamp(value, "");
+  if (!iso) {
+    return "";
+  }
+  const date = new Date(iso);
+  const now = new Date();
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  if (isToday) {
+    return `${hour}:${minute}`;
+  }
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${month}/${day} ${hour}:${minute}`;
 }
 
 export function parseTodoVoiceCommand(input) {
@@ -160,9 +237,13 @@ export function parseTodoVoiceCommand(input) {
   const createMatch = text.match(/^(?:添加(?:一个)?|新增|增加|加一个)(?:计划|待办|todo)?\s*(.*)$/iu);
   if (createMatch) {
     const title = normalizeTitle(createMatch[1]);
-    return title
-      ? { ok: true, action: "create", text: title }
-      : { ok: false, message: "请说：添加计划 XXX" };
+    if (!title) {
+      return { ok: false, message: "请说：添加计划 XXX" };
+    }
+    const dueAt = parseLooseDueAt(title);
+    return dueAt
+      ? { ok: true, action: "create", text: title, dueAt }
+      : { ok: true, action: "create", text: title };
   }
 
   const deleteMatch = text.match(/^(?:删除|删掉)(?:计划|待办|todo)\s*(?:第)?([0-9]+)(?:项)?$/iu);
@@ -280,7 +361,7 @@ export class TodoService {
       case "list":
         return this.list();
       case "create":
-        return this.create(command?.text);
+        return this.create(command?.text, { dueAt: command?.dueAt });
       case "update":
         return this.update(command?.index, command?.text, command?.id);
       case "delete":
@@ -310,7 +391,7 @@ export class TodoService {
     };
   }
 
-  create(text) {
+  create(text, options = {}) {
     const title = normalizeTitle(text);
     if (!title) {
       throw new Error("todo_title_required");
@@ -323,6 +404,7 @@ export class TodoService {
       completed: false,
       createdAt: now,
       updatedAt: now,
+      dueAt: normalizeTimestamp(options?.dueAt, ""),
       appleId: "",
       source: "local",
       syncUpdatedAt: ""
@@ -520,6 +602,7 @@ export class TodoService {
         completed: remoteCompleted,
         createdAt: remoteUpdatedAt,
         updatedAt: remoteUpdatedAt,
+        dueAt: normalizeTimestamp(reminder?.dueDate || reminder?.dueAt, ""),
         appleId,
         source: "apple",
         syncUpdatedAt: remoteUpdatedAt
@@ -538,9 +621,11 @@ export class TodoService {
       return { changed: false, item: cloneItem(item), created: false };
     }
 
+    const nextDueAt = normalizeTimestamp(reminder?.dueDate || reminder?.dueAt, "");
     const changed =
       item.title !== title ||
       item.completed !== remoteCompleted ||
+      item.dueAt !== nextDueAt ||
       item.appleId !== appleId ||
       item.source !== "apple" ||
       item.syncUpdatedAt !== remoteUpdatedAt ||
@@ -552,6 +637,7 @@ export class TodoService {
 
     item.title = title;
     item.completed = remoteCompleted;
+    item.dueAt = nextDueAt;
     item.appleId = appleId;
     item.source = "apple";
     item.updatedAt = remoteUpdatedAt;

@@ -74,6 +74,35 @@ test("TodoService supports CRUD and selection", () => {
   }
 });
 
+test("TodoService keeps dueAt from create and remote sync", () => {
+  const { dir, filePath } = createTempTodoPath();
+  try {
+    const service = createTodoService({ storagePath: filePath, seedDefaultItems: false });
+
+    const created = service.runCommand({
+      action: "create",
+      text: "晨会",
+      dueAt: "2026-04-22T09:30:00.000Z"
+    });
+    assert.equal(created.item.dueAt, "2026-04-22T09:30:00.000Z");
+
+    const synced = service.applyRemoteReminder({
+      appleId: "apple-1",
+      title: "回访客户",
+      dueDate: "2026-04-23T08:00:00.000Z",
+      updatedAt: "2026-04-21T10:00:00.000Z"
+    });
+    assert.equal(synced.changed, true);
+
+    const snapshot = service.getSnapshot();
+    const remote = snapshot.items.find((item) => item.appleId === "apple-1");
+    assert.ok(remote);
+    assert.equal(remote.dueAt, "2026-04-23T08:00:00.000Z");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("TodoService backs up corrupt files and starts empty", () => {
   const { dir, filePath } = createTempTodoPath();
   try {
