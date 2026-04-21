@@ -122,6 +122,9 @@ void CustomLcdDisplay::lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, 
         for (int xx = 0; xx < w; xx++) {
             int x = x1 + xx;
             bool white = rgb565_is_white(row[xx], driver->bw_threshold);
+            if (driver->inverted_) {
+                white = !white;
+            }
             set_pixel_1bpp(driver->buffer, driver->Width, x, y, white);
         }
     }
@@ -376,6 +379,19 @@ void CustomLcdDisplay::SetOnRefreshIdle(std::function<void()> cb) {
     }
 }
 
+
+void CustomLcdDisplay::SetSampleIntervalMs(int interval_ms) {
+    const int clamped = std::max(200, std::min(10000, interval_ms));
+    if (dirty_mutex) {
+        xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+    }
+    sample_interval_ms = clamped;
+    if (dirty_mutex) {
+        xSemaphoreGive(dirty_mutex);
+    }
+    ESP_LOGI(TAG, "SetSampleIntervalMs: %d", clamped);
+}
+
 void CustomLcdDisplay::SetNextKickMs(uint32_t kick_ms) {
     if (dirty_mutex) {
         xSemaphoreTake(dirty_mutex, portMAX_DELAY);
@@ -383,6 +399,30 @@ void CustomLcdDisplay::SetNextKickMs(uint32_t kick_ms) {
     next_kick_ms_ = kick_ms;
     if (dirty_mutex) {
         xSemaphoreGive(dirty_mutex);
+    }
+}
+
+void CustomLcdDisplay::SetInverted(bool enabled) {
+    bool changed = false;
+    if (dirty_mutex) {
+        xSemaphoreTake(dirty_mutex, portMAX_DELAY);
+    }
+    if (inverted_ != enabled) {
+        inverted_ = enabled;
+        force_full_refresh_ = true;
+        pending = true;
+        refresh_in_progress = true;
+        UpdateDisplayBusyLocked();
+        changed = true;
+    }
+    if (dirty_mutex) {
+        xSemaphoreGive(dirty_mutex);
+    }
+    if (changed) {
+        sm_kick(kDisplayKickMs, "display_invert");
+        if (refresh_task) {
+            xTaskNotifyGive(refresh_task);
+        }
     }
 }
 
@@ -1173,6 +1213,9 @@ void CustomLcdDisplay::WriteRaw1bpp(int x, int y, int w, int h, const uint8_t* d
             if (dx < 0 || dx >= Width) continue;
             // 读取源 bit（1=黑）
             bool black = (src_row[col >> 3] >> (7 - (col & 7))) & 1;
+            if (inverted_) {
+                black = !black;
+            }
             // 写入帧缓冲（1=白, 0=黑）
             uint32_t idx = (uint32_t)dy * dst_bytes_per_row + (uint32_t)(dx >> 3);
             uint8_t mask = (uint8_t)(1U << (7 - (dx & 7)));
@@ -1274,7 +1317,7 @@ void CustomLcdDisplay::render_text_to_buffer(const char* text, int start_x, int 
                     int px = gx + col;
                     int py = gy + row;
                     if (px >= 0 && px < Width && py >= 0 && py < Height) {
-                        set_pixel_1bpp(buffer, Width, px, py, false);  // false = 黑色
+                        set_pixel_1bpp(buffer, Width, px, py, inverted_);  // inverted: text white, normal: text black
                     }
                 }
             }
@@ -1289,7 +1332,7 @@ void CustomLcdDisplay::DrawTexts(const std::vector<TextItem>& texts, bool clear)
 
     if (clear) {
         size_t buf_len = (size_t)((Width + 7) >> 3) * Height;
-        memset(buffer, 0xFF, buf_len);  // 全白
+        memset(buffer, inverted_ ? 0x00 : 0xFF, buf_len);
     }
 
     for (const auto& item : texts) {

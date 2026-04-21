@@ -186,6 +186,25 @@ function normalizePositiveNumber(value, fallback) {
   return numeric;
 }
 
+function normalizeRefreshIntervalMs(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.min(10_000, Math.max(200, Math.round(numeric)));
+}
+
+function normalizeDisplayStyle(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (["dark", "black", "black_on_white", "black-on-white", "黑底白字"].includes(text)) {
+    return "dark";
+  }
+  if (["light", "white", "white_on_black", "white-on-black", "白底黑字"].includes(text)) {
+    return "light";
+  }
+  return "light";
+}
+
 export function isCliAvailable(command) {
   if (!command) {
     return false;
@@ -413,6 +432,9 @@ export function loadConfig(options = {}) {
     remindersListName: String(process.env.REMINDERS_LIST || "").trim(),
     remindersPollSec: normalizePositiveNumber(process.env.REMINDERS_POLL_SEC || "15", 15),
     remindersRemindctlTimeoutMs: normalizePositiveNumber(process.env.REMINDCTL_TIMEOUT_MS || "20000", 20000),
+    displayTodoRefreshMs: normalizeRefreshIntervalMs(process.env.DISPLAY_TODO_REFRESH_MS || "800", 800),
+    displayCodingRefreshMs: normalizeRefreshIntervalMs(process.env.DISPLAY_CODING_REFRESH_MS || "800", 800),
+    displayStyle: normalizeDisplayStyle(process.env.DISPLAY_STYLE || "light"),
 
     dryRunTextInjection: process.env.DRY_RUN_TEXT_INJECTION === "1",
     terminalMirrorTargets: String(process.env.TERMINAL_MIRROR_TARGETS || "").trim(),

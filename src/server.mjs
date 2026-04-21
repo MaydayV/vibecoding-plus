@@ -53,6 +53,36 @@ const todoSyncStatus = {
   syncCount: 0
 };
 
+function getDisplayConfigValues(nextValues = {}) {
+  const todoRefreshMs = Math.min(
+    10_000,
+    Math.max(
+      200,
+      Number(nextValues.todoRefreshMs ?? process.env.DISPLAY_TODO_REFRESH_MS ?? config.displayTodoRefreshMs ?? 800)
+    )
+  );
+  const codingRefreshMs = Math.min(
+    10_000,
+    Math.max(
+      200,
+      Number(nextValues.codingRefreshMs ?? process.env.DISPLAY_CODING_REFRESH_MS ?? config.displayCodingRefreshMs ?? 800)
+    )
+  );
+  const style =
+    String(nextValues.style ?? process.env.DISPLAY_STYLE ?? config.displayStyle ?? "light").trim().toLowerCase() === "dark"
+      ? "dark"
+      : "light";
+  return { todoRefreshMs, codingRefreshMs, style };
+}
+
+function buildDisplayConfigPayload() {
+  return {
+    type: "display_config",
+    ...getDisplayConfigValues()
+  };
+}
+
+
 let remindersSyncController = null;
 
 function setTodoSyncStatus(patch) {
@@ -1051,6 +1081,56 @@ function printBanner() {
   console.log(`\nRun with --doctor to check your environment.\n`);
 }
 
+function broadcastDisplayConfig() {
+  broadcastJson(buildDisplayConfigPayload());
+}
+
+async function applyDisplayConfig(nextValues = {}) {
+  const values = getDisplayConfigValues(nextValues);
+  process.env.DISPLAY_TODO_REFRESH_MS = String(values.todoRefreshMs);
+  process.env.DISPLAY_CODING_REFRESH_MS = String(values.codingRefreshMs);
+  process.env.DISPLAY_STYLE = values.style;
+
+  config.displayTodoRefreshMs = values.todoRefreshMs;
+  config.displayCodingRefreshMs = values.codingRefreshMs;
+  config.displayStyle = values.style;
+
+  broadcastDisplayConfig();
+
+  return {
+    ok: true,
+    applied: true,
+    restartRequired: false,
+    error: ""
+  };
+}
+
+function applyTodoSyncRuntimeConfig() {
+  config.remindersSyncEnabled = String(process.env.REMINDERS_SYNC_ENABLED || "0").trim() === "1";
+  config.remindersRemindctlPath = String(process.env.REMINDCTL_PATH || "remindctl").trim() || "remindctl";
+  config.remindersListName = String(process.env.REMINDERS_LIST || "").trim();
+  config.remindersPollSec = Math.max(1, Number(process.env.REMINDERS_POLL_SEC || 15));
+
+  remindersSyncController?.stop();
+  remindersSyncController = createTodoRemindersSync({
+    config,
+    todoService,
+    onStateChanged: onTodoChanged,
+    onStatusChanged: onTodoSyncStatusChanged,
+    logger: (...parts) => log(...parts)
+  });
+  setTodoSyncStatus(remindersSyncController.getStatus());
+  remindersSyncController.start();
+
+  return {
+    ok: true,
+    applied: true,
+    restartRequired: false,
+    status: getTodoSyncStatus(),
+    error: ""
+  };
+}
+
 function getTargetLabel(sendTarget) {
   if (sendTarget === "claude_code") {
     return "Claude";
@@ -1072,7 +1152,10 @@ function emitServerReady(ws) {
     transcriptDeliveryMode: config.transcriptDeliveryMode,
     sendTarget: config.sendTarget,
     mode: getVoiceMode(ws.clientState),
-    authRequired: Boolean(config.lanSharedSecret)
+    authRequired: Boolean(config.lanSharedSecret),
+    displayTodoRefreshMs: config.displayTodoRefreshMs,
+    displayCodingRefreshMs: config.displayCodingRefreshMs,
+    displayStyle: config.displayStyle
   });
 }
 
@@ -1922,6 +2005,8 @@ const adminRoutes = createAdminRoutes({
   broadcastTodoState,
   getTodoSyncStatus,
   runTodoSyncNow,
+  applyTodoSyncConfig: async () => applyTodoSyncRuntimeConfig(),
+  applyDisplayConfig,
   deleteTodoRemindersByItems,
   shutdown
 });
@@ -2008,6 +2093,7 @@ wss.on("connection", (ws, req) => {
           log("hello", { deviceId: state.deviceId, boardType: message.boardType || "unknown" });
           sendJson(ws, { type: "hello_ack", deviceId: state.deviceId });
           emitServerReady(ws);
+          sendJson(ws, buildDisplayConfigPayload());
           emitCliSnapshot(ws);
           break;
         case "ptt_start":

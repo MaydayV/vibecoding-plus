@@ -40,6 +40,8 @@ public:
     virtual void SetPowerSaveMode(bool on);
     virtual void RequestUrgentRefresh() {}
     virtual void RequestUrgentFullRefresh() {}
+    virtual void SetSampleIntervalMs(int interval_ms) { (void)interval_ms; }
+    virtual void SetInverted(bool enabled) { (void)enabled; }
 
     // 写入原始 1bpp 位图数据到帧缓冲区（由子类实现）
     // data 中 bit=1 表示黑色像素，bit=0 表示白色像素

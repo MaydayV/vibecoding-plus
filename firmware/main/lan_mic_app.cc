@@ -306,6 +306,9 @@ bool LanMicApp::Initialize() {
     cli_log_lines_.clear();
     active_page_ = Page::Summary;
     voice_mode_ = VoiceMode::Normal;
+    display_todo_refresh_ms_ = 800;
+    display_coding_refresh_ms_ = 800;
+    display_dark_style_ = false;
     hint_text_ = "长按UP打开菜单\n长按BOOT开始语音";
     phase_ = Phase::Idle;
     network_state_ = NetworkState::Offline;
@@ -1391,15 +1394,28 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
             active_page_ = Page::Summary;
         }
         SyncVoiceModeToActivePage();
-    } else if (strcmp(type, "mode_state") == 0) {
-        const char* mode = GetJsonString(root, "mode");
-        if (mode != nullptr) {
-            voice_mode_ = strcmp(mode, "todo") == 0 ? VoiceMode::Todo : VoiceMode::Normal;
-            if (phase_ == Phase::Idle && !has_pending_transcript_) {
-                SyncVoiceModeToActivePage();
-            }
+    } else if (strcmp(type, "display_config") == 0) {
+        cJSON* todo_refresh_ms = cJSON_GetObjectItemCaseSensitive(root, "todoRefreshMs");
+        cJSON* coding_refresh_ms = cJSON_GetObjectItemCaseSensitive(root, "codingRefreshMs");
+        const char* style = GetJsonString(root, "style");
+
+        if (cJSON_IsNumber(todo_refresh_ms)) {
+            display_todo_refresh_ms_ = std::clamp(todo_refresh_ms->valueint, 200, 10000);
         }
-    } else if (strcmp(type, "todo_state") == 0) {
+        if (cJSON_IsNumber(coding_refresh_ms)) {
+            display_coding_refresh_ms_ = std::clamp(coding_refresh_ms->valueint, 200, 10000);
+        }
+        if (style != nullptr) {
+            display_dark_style_ = std::strcmp(style, "dark") == 0;
+        }
+
+        if (display_ != nullptr) {
+            const int interval = active_page_ == Page::Todo ? display_todo_refresh_ms_ : display_coding_refresh_ms_;
+            display_->SetSampleIntervalMs(interval);
+            display_->SetInverted(display_dark_style_);
+        }
+    } else if (strcmp(type, "mode_state") == 0) {
+
         cJSON* items = cJSON_GetObjectItemCaseSensitive(root, "items");
         cJSON* selected_index = cJSON_GetObjectItemCaseSensitive(root, "selectedIndex");
         const char* last_action = GetJsonString(root, "lastActionText");
@@ -2329,6 +2345,11 @@ void LanMicApp::SwitchPage(Page page) {
     offline_todo_mode_ = page == Page::Todo ? offline_todo_mode_ : false;
     todo_menu_open_ = false;
     settings_editing_volume_ = false;
+    if (display_ != nullptr) {
+        const int interval = page == Page::Todo ? display_todo_refresh_ms_ : display_coding_refresh_ms_;
+        display_->SetSampleIntervalMs(interval);
+        display_->SetInverted(display_dark_style_);
+    }
     if (page == Page::Todo || page == Page::Summary) {
         SyncVoiceModeToPage(page);
     }
@@ -2760,6 +2781,10 @@ void LanMicApp::UpdateDisplay() {
     if (display_ == nullptr) {
         return;
     }
+
+    const int interval = active_page_ == Page::Todo ? display_todo_refresh_ms_ : display_coding_refresh_ms_;
+    display_->SetSampleIntervalMs(interval);
+    display_->SetInverted(display_dark_style_);
 
     const Page render_page = active_page_;
     const bool render_offline_todo_mode = offline_todo_mode_;

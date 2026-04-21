@@ -64,14 +64,15 @@ public:
     void RequestUrgentRefresh() override;
     // Force a full e-paper refresh on the next immediate update.
     void RequestUrgentFullRefresh() override;
-
+    void SetSampleIntervalMs(int interval_ms) override;
+    void SetInverted(bool enabled) override;
     // Refresh state for sleep gating
     bool IsRefreshPending();
 
     // Notify when refresh transitions from busy to idle.
     void SetOnRefreshIdle(std::function<void()> cb);
     void SetNextKickMs(uint32_t kick_ms);
-    
+
 private:
     const custom_lcd_spi_t lcd_spi_data;
     const int Width;
@@ -141,6 +142,7 @@ private:
 
     bool urgent_refresh = false;
     bool force_full_refresh_ = false;
+    bool inverted_ = false;
     TickType_t last_sample_tick = 0;
     int sample_interval_ms = 300; // 节流：采样间隔（可调 200~800）
 

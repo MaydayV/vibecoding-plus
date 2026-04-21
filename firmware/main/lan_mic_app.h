@@ -51,6 +51,9 @@ private:
     TaskHandle_t connect_task_handle_ = nullptr;
     bool has_pending_transcript_ = false;
     std::string send_target_;         // received from server_ready: "claude_code" | "codex_exec" | "text_injector"
+    int display_todo_refresh_ms_ = 800;
+    int display_coding_refresh_ms_ = 800;
+    bool display_dark_style_ = false;
     std::vector<int16_t> audio_frame_buffer_; // reused across StreamAudioFrame() calls
     std::deque<std::vector<int16_t>> preroll_frames_;
     enum class Phase {
