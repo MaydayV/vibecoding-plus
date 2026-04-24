@@ -814,7 +814,7 @@ function extractPlanOptionsFromJsonText(text) {
           continue;
         }
         if (item && typeof item === "object") {
-          candidates.push(item.text || item.title || item.step || item.item || "");
+          candidates.push(flattenPlanOptionObject(item));
         }
       }
     }

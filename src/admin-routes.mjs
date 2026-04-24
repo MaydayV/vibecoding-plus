@@ -440,9 +440,14 @@ export function createAdminRoutes(options) {
     if (pathname === "/api/admin/restart" && req.method === "POST") {
       const nextArgs = process.argv.slice(1);
       try {
+        const envPath = getAdminEnvPath();
+        const fileValues = fs.existsSync(envPath)
+          ? parseEnvContent(fs.readFileSync(envPath, "utf8"))
+          : {};
+        const childEnv = { ...process.env, ...fileValues };
         const child = spawn(process.execPath, nextArgs, {
           cwd: process.cwd(),
-          env: process.env,
+          env: childEnv,
           detached: true,
           stdio: "ignore"
         });
