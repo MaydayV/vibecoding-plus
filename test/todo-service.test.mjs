@@ -103,6 +103,35 @@ test("TodoService keeps dueAt from create and remote sync", () => {
   }
 });
 
+test("TodoService update supports dueAt-only and clear dueAt", () => {
+  const { dir, filePath } = createTempTodoPath();
+  try {
+    const service = createTodoService({ storagePath: filePath, seedDefaultItems: false });
+
+    const created = service.runCommand({
+      action: "create",
+      text: "晨会",
+      dueAt: "2026-04-22T09:30:00.000Z"
+    });
+
+    const updatedDue = service.runCommand({
+      action: "update",
+      id: created.item.id,
+      dueAt: "2026-04-24T00:00:00.000Z"
+    });
+    assert.equal(updatedDue.item.dueAt, "2026-04-24T00:00:00.000Z");
+
+    const clearedDue = service.runCommand({
+      action: "update",
+      id: created.item.id,
+      dueAt: ""
+    });
+    assert.equal(clearedDue.item.dueAt, "");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("TodoService backs up corrupt files and starts empty", () => {
   const { dir, filePath } = createTempTodoPath();
   try {
@@ -118,6 +147,7 @@ test("TodoService backs up corrupt files and starts empty", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
 
 test("TodoService seeds onboarding examples when storage is missing", () => {
   const { dir, filePath } = createTempTodoPath();

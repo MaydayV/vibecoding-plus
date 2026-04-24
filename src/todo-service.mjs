@@ -362,8 +362,13 @@ export class TodoService {
         return this.list();
       case "create":
         return this.create(command?.text, { dueAt: command?.dueAt });
-      case "update":
-        return this.update(command?.index, command?.text, command?.id);
+      case "update": {
+        const hasDueAt = command && Object.prototype.hasOwnProperty.call(command, "dueAt");
+        return this.update(command?.index, command?.text, command?.id, {
+          hasDueAt,
+          dueAt: command?.dueAt
+        });
+      }
       case "delete":
         return this.delete(command?.index, command?.id);
       case "clear":
@@ -426,15 +431,28 @@ export class TodoService {
     return result;
   }
 
-  update(index, text, id) {
+  update(index, text, id, options = {}) {
     const resolvedIndex = this.#resolveIndex(index, id);
-    const title = normalizeTitle(text);
-    if (!title) {
-      throw new Error("todo_title_required");
+    const hasTitle = text !== undefined;
+    const hasDueAt = Boolean(options?.hasDueAt);
+    if (!hasTitle && !hasDueAt) {
+      throw new Error("todo_update_payload_required");
     }
 
     const item = this.items[resolvedIndex];
-    item.title = title;
+
+    if (hasTitle) {
+      const title = normalizeTitle(text);
+      if (!title) {
+        throw new Error("todo_title_required");
+      }
+      item.title = title;
+    }
+
+    if (hasDueAt) {
+      item.dueAt = normalizeTimestamp(options?.dueAt, "");
+    }
+
     item.updatedAt = new Date().toISOString();
     item.source = "local";
     this.selectedIndex = resolvedIndex;
@@ -452,6 +470,7 @@ export class TodoService {
     this.#emitChange(result);
     return result;
   }
+
 
   delete(index, id) {
     const resolvedIndex = this.#resolveIndex(index, id);

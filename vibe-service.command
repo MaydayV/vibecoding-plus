@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
 
 PROJECT_DIR="/Users/colin/Dev/vibecoding-plus"
 SESSION_NAME="vibe"
@@ -69,9 +69,13 @@ start_service() {
     sleep 1
   fi
 
-  tmux new-session -d -s "$SESSION_NAME" "cd '$PROJECT_DIR' && VIBE_INVOKE_CWD='$PROJECT_DIR' REMINDCTL_PATH='$REMINDCTL_BIN' node src/server.mjs >> '$LOG_FILE' 2>&1"
-  echo "服务已启动（tmux: $SESSION_NAME）。"
-  echo "remindctl 路径: $REMINDCTL_BIN"
+  if ! tmux new-session -d -s "$SESSION_NAME" "cd '$PROJECT_DIR' && VIBE_INVOKE_CWD='$PROJECT_DIR' REMINDCTL_PATH='$REMINDCTL_BIN' node src/server.mjs >> '$LOG_FILE' 2>&1"; then
+    echo "服务启动失败，请查看日志：$LOG_FILE"
+    return 1
+  fi
+
+  echo "服务已启动（tmux 会话已创建）。"
+  echo "remindctl 路径: ${REMINDCTL_BIN:-未设置}"
 }
 
 stop_service() {
@@ -150,12 +154,12 @@ while true; do
 
   echo
   case "$choice" in
-    1) start_service ;;
-    2) restart_service ;;
-    3) stop_service ;;
-    4) show_status ;;
-    5) show_logs ;;
-    6) attach_tmux ;;
+    1) start_service || true ;;
+    2) restart_service || true ;;
+    3) stop_service || true ;;
+    4) show_status || true ;;
+    5) show_logs || true ;;
+    6) attach_tmux || true ;;
     0) echo "已退出。"; exit 0 ;;
     *) echo "无效选项，请重试。" ;;
   esac
@@ -163,4 +167,3 @@ while true; do
   echo
   read -r -p "按回车继续..." _
 done
-

@@ -1,9 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-
+import { promisify } from "node:util";
 
 import { WebSocketServer, WebSocket } from "ws";
 
@@ -26,6 +26,7 @@ import { createTodoRemindersSync } from "./todo-reminders-sync.mjs";
 
 
 const config = loadConfig();
+const execFileAsync = promisify(execFile);
 
 if (process.argv.includes("--doctor")) {
   await runDoctor(config);
@@ -429,7 +430,18 @@ function readClaudeTranscriptSnapshot() {
   };
 }
 
-function getTerminalMirrorPaneTargets() {
+async function runTmuxCommand(args) {
+  try {
+    const result = await execFileAsync("tmux", args, {
+      encoding: "utf8"
+    });
+    return String(result?.stdout || "");
+  } catch {
+    return "";
+  }
+}
+
+async function getTerminalMirrorPaneTargets() {
   const now = Date.now();
   if (terminalMirrorPaneTargetsCache.expiresAt > now && terminalMirrorPaneTargetsCache.targets.length > 0) {
     return terminalMirrorPaneTargetsCache.targets;
@@ -455,49 +467,23 @@ function getTerminalMirrorPaneTargets() {
 
   pushTarget(config.terminalMirrorSession, config.terminalMirrorWindow);
 
-  let activeSession = "";
-  let activeWindow = "";
-  try {
-    activeSession = String(
-      execFileSync("tmux", ["display-message", "-p", "#{session_name}"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"]
-      })
-    ).trim();
-    activeWindow = String(
-      execFileSync("tmux", ["display-message", "-p", "#{window_name}"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"]
-      })
-    ).trim();
-  } catch {
-    // ignore
-  }
-
+  const activeSession = (await runTmuxCommand(["display-message", "-p", "#{session_name}"])).trim();
+  const activeWindow = (await runTmuxCommand(["display-message", "-p", "#{window_name}"])).trim();
   pushTarget(activeSession, activeWindow);
 
-  try {
-    const listOutput = String(
-      execFileSync("tmux", ["list-windows", "-a", "-F", "#{session_name}:#{window_name}"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"]
-      })
-    );
-    for (const line of listOutput.split(/\r?\n/)) {
-      const pair = String(line || "").trim();
-      if (!pair) {
-        continue;
-      }
-      const separatorIndex = pair.lastIndexOf(":");
-      if (separatorIndex <= 0 || separatorIndex === pair.length - 1) {
-        continue;
-      }
-      const session = pair.slice(0, separatorIndex).trim();
-      const window = pair.slice(separatorIndex + 1).trim();
-      pushTarget(session, window);
+  const listOutput = await runTmuxCommand(["list-windows", "-a", "-F", "#{session_name}:#{window_name}"]);
+  for (const line of listOutput.split(/\r?\n/)) {
+    const pair = String(line || "").trim();
+    if (!pair) {
+      continue;
     }
-  } catch {
-    // ignore
+    const separatorIndex = pair.lastIndexOf(":");
+    if (separatorIndex <= 0 || separatorIndex === pair.length - 1) {
+      continue;
+    }
+    const session = pair.slice(0, separatorIndex).trim();
+    const window = pair.slice(separatorIndex + 1).trim();
+    pushTarget(session, window);
   }
 
   terminalMirrorPaneTargetsCache = {
@@ -507,24 +493,16 @@ function getTerminalMirrorPaneTargets() {
   return terminalMirrorPaneTargetsCache.targets;
 }
 
-
-function readTmuxPaneLines(session, window, lines) {
+async function readTmuxPaneLines(session, window, lines) {
   return String(
-    execFileSync(
-      "tmux",
-      [
-        "capture-pane",
-        "-pt",
-        `${session}:${window}`,
-        "-S",
-        `-${Math.max(20, Math.min(400, Number(lines) || 60))}`,
-        "-J"
-      ],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"]
-      }
-    ) || ""
+    (await runTmuxCommand([
+      "capture-pane",
+      "-pt",
+      `${session}:${window}`,
+      "-S",
+      `-${Math.max(20, Math.min(400, Number(lines) || 60))}`,
+      "-J"
+    ])) || ""
   );
 }
 
@@ -679,7 +657,7 @@ function updateCliSummaryFromTranscriptSnapshot(snapshot) {
     applyPlanOptions(client, client.clientState, options);
   }
 }
-function pollTerminalMirrorOnce() {
+async function pollTerminalMirrorOnce() {
   if (!config.terminalMirrorEnabled) {
     return;
   }
@@ -715,7 +693,7 @@ function pollTerminalMirrorOnce() {
   }
 
   try {
-    const targets = getTerminalMirrorPaneTargets();
+    const targets = await getTerminalMirrorPaneTargets();
     if (targets.length === 0) {
       if (terminalMirrorLastError !== "no_tmux_target") {
         terminalMirrorLastError = "no_tmux_target";
@@ -727,11 +705,7 @@ function pollTerminalMirrorOnce() {
     let captured = "";
     let matchedTarget = null;
     for (const target of targets) {
-      try {
-        captured = readTmuxPaneLines(target.session, target.window, config.terminalMirrorLines);
-      } catch {
-        continue;
-      }
+      captured = await readTmuxPaneLines(target.session, target.window, config.terminalMirrorLines);
       if (captured && captured.trim()) {
         matchedTarget = target;
         break;
@@ -779,11 +753,11 @@ function restartTerminalMirrorPolling() {
 
   const intervalMs = Math.max(300, Number(config.terminalMirrorIntervalMs) || 800);
   terminalMirrorPollTimer = setInterval(() => {
-    pollTerminalMirrorOnce();
+    void pollTerminalMirrorOnce();
   }, intervalMs);
   terminalMirrorPollTimer.unref?.();
 
-  pollTerminalMirrorOnce();
+  void pollTerminalMirrorOnce();
 }
 
 function extractJsonObjectsFromText(text) {
@@ -857,7 +831,7 @@ function extractPlanOptionsFromJsonText(text) {
           continue;
         }
         if (item && typeof item === "object") {
-          candidates.push(item.text || item.title || item.step || item.item || "");
+          candidates.push(flattenPlanOptionObject(item));
         }
       }
     }
@@ -886,15 +860,39 @@ function normalizePlanOptionText(value) {
     .trim();
 }
 
+function flattenPlanOptionObject(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+  const primary = normalizePlanOptionText(
+    item.text || item.title || item.step || item.item || item.name || ""
+  );
+  const detail = normalizePlanOptionText(
+    item.description || item.detail || item.content || item.summary || item.goal || ""
+  );
+  if (primary && detail) {
+    return primary.includes(detail) ? primary : `${primary}：${detail}`;
+  }
+  return primary || detail;
+}
+
 function collectUniquePlanOptions(candidates) {
   const options = [];
   const seen = new Set();
   for (const candidate of candidates) {
     const normalized = normalizePlanOptionText(candidate);
-    if (!normalized || seen.has(normalized)) {
+    if (!normalized) {
       continue;
     }
-    seen.add(normalized);
+    const dedupeKey = normalized
+      .replace(/^\d+[.)、]\s*/u, "")
+      .replace(/^任务\s*[一二三四五六七八九十\d]+[：:\-]\s*/u, "")
+      .trim();
+    const key = dedupeKey || normalized;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
     options.push(normalized);
     if (options.length >= MAX_PLAN_OPTIONS) {
       break;

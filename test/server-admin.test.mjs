@@ -106,7 +106,10 @@ test("admin page and APIs support todo/env editing", async (t) => {
   const createTodoRes = await fetch(`http://127.0.0.1:${port}/api/admin/todos`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: "管理页新增待办" })
+    body: JSON.stringify({
+      title: "管理页新增待办",
+      dueAt: "2026-05-01T00:00:00.000Z"
+    })
   });
   assert.equal(createTodoRes.status, 200);
   const createTodoPayload = await createTodoRes.json();
@@ -114,17 +117,24 @@ test("admin page and APIs support todo/env editing", async (t) => {
   assert.equal(createTodoPayload.snapshot.items.length, baselineCount + 1);
   const created = createTodoPayload.snapshot.items.find((item) => item.title === "管理页新增待办");
   assert.ok(created);
+  assert.equal(created.dueAt, "2026-05-01T00:00:00.000Z");
 
   const updateTodoRes = await fetch(`http://127.0.0.1:${port}/api/admin/todos`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: created.id, title: "管理页编辑后待办", completed: true })
+    body: JSON.stringify({
+      id: created.id,
+      title: "管理页编辑后待办",
+      dueAt: "2026-05-03T00:00:00.000Z",
+      completed: true
+    })
   });
   assert.equal(updateTodoRes.status, 200);
   const updateTodoPayload = await updateTodoRes.json();
   const updated = updateTodoPayload.snapshot.archiveItems.find((item) => item.id === created.id);
   assert.equal(updateTodoPayload.snapshot.items.some((item) => item.id === created.id), false);
   assert.equal(updated.title, "管理页编辑后待办");
+  assert.equal(updated.dueAt, "2026-05-03T00:00:00.000Z");
   assert.equal(updated.completed, true);
 
   const deleteTodoRes = await fetch(`http://127.0.0.1:${port}/api/admin/todos`, {
@@ -151,16 +161,23 @@ test("admin page and APIs support todo/env editing", async (t) => {
     body: JSON.stringify({
       enabled: true,
       remindctlPath: "remindctl",
-      list: "Inbox",
+      list: "",
       pollSec: 20
     })
   });
   assert.equal(syncPostRes.status, 200);
   const syncPostPayload = await syncPostRes.json();
   assert.equal(syncPostPayload.ok, true);
-  assert.equal(syncPostPayload.restartRequired, true);
+  assert.equal(syncPostPayload.applied, true);
+  assert.equal(syncPostPayload.restartRequired, false);
   assert.equal(syncPostPayload.values.REMINDERS_SYNC_ENABLED, "1");
-  assert.equal(syncPostPayload.values.REMINDERS_LIST, "Inbox");
+  assert.equal(syncPostPayload.values.REMINDERS_LIST, "");
+
+  const syncGetAfterRes = await fetch(`http://127.0.0.1:${port}/api/admin/todo-sync`);
+  assert.equal(syncGetAfterRes.status, 200);
+  const syncGetAfterPayload = await syncGetAfterRes.json();
+  assert.equal(syncGetAfterPayload.ok, true);
+  assert.equal(syncGetAfterPayload.values.list, "");
 
   const syncRunRes = await fetch(`http://127.0.0.1:${port}/api/admin/todo-sync/run`, {
     method: "POST",

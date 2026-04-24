@@ -1335,16 +1335,34 @@ void CustomLcdDisplay::DrawTexts(const std::vector<TextItem>& texts, bool clear)
         memset(buffer, inverted_ ? 0x00 : 0xFF, buf_len);
     }
 
+    int min_x = Width;
+    int min_y = Height;
+    int max_x = 0;
+    int max_y = 0;
+    bool has_dirty_text = false;
+
     for (const auto& item : texts) {
-        // size >= 20 用 24px 字体，否则用 16px
         const lv_font_t* font = (item.size >= 20)
             ? &SourceHanSansSC_Medium_slim
             : &BUILTIN_TEXT_FONT;
         render_text_to_buffer(item.content.c_str(), item.x, item.y, font);
+
+        const int text_w = static_cast<int>(item.content.size()) * item.size;
+        const int text_h = item.size + 6;
+        min_x = std::min(min_x, item.x);
+        min_y = std::min(min_y, item.y);
+        max_x = std::max(max_x, item.x + text_w);
+        max_y = std::max(max_y, item.y + text_h);
+        has_dirty_text = true;
     }
 
-    // 标记全屏脏区并触发刷新
-    Rect r = clamp_rect(align_x8({0, 0, Width, Height}), Width, Height);
+    Rect r = {0, 0, Width, Height};
+    if (!clear && has_dirty_text) {
+        r = clamp_rect(align_x8({min_x, min_y, max_x - min_x, max_y - min_y}), Width, Height);
+    } else {
+        r = clamp_rect(align_x8(r), Width, Height);
+    }
+
     dirty = rect_union(dirty, r);
     pending = true;
     refresh_in_progress = true;
@@ -1357,3 +1375,4 @@ void CustomLcdDisplay::DrawTexts(const std::vector<TextItem>& texts, bool clear)
     xSemaphoreGive(dirty_mutex);
     ESP_LOGI(TAG, "DrawTexts: %zu items, clear=%d", texts.size(), (int)clear);
 }
+

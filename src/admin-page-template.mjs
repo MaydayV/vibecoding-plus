@@ -155,6 +155,7 @@ export function buildAdminPageTemplate() {
           <div>
             <div class="row">
               <input id="newTodoTitle" type="text" placeholder="新增待办…" />
+              <input id="newTodoDueDate" type="date" />
               <button id="addTodoBtn" class="primary">新增</button>
               <button id="refreshTodoBtn">刷新</button>
             </div>
@@ -322,6 +323,52 @@ export function buildAdminPageTemplate() {
         });
       }
 
+      function toDateInputValue(dueAt) {
+        const text = String(dueAt || "").trim();
+        if (!text) {
+          return "";
+        }
+        const parsed = new Date(text);
+        if (Number.isNaN(parsed.getTime())) {
+          return "";
+        }
+        const year = parsed.getFullYear();
+        const month = String(parsed.getMonth() + 1).padStart(2, "0");
+        const day = String(parsed.getDate()).padStart(2, "0");
+        return year + "-" + month + "-" + day;
+      }
+
+      function dateInputToDueAt(value) {
+        const text = String(value || "").trim();
+        if (!text) {
+          return "";
+        }
+        const parts = text.split("-");
+        if (parts.length !== 3) {
+          return "";
+        }
+        const year = Number.parseInt(parts[0], 10);
+        const month = Number.parseInt(parts[1], 10);
+        const day = Number.parseInt(parts[2], 10);
+        if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+          return "";
+        }
+        const parsed = new Date(year, month - 1, day, 0, 0, 0, 0);
+        if (Number.isNaN(parsed.getTime())) {
+          return "";
+        }
+        return parsed.toISOString();
+      }
+
+      function dueAtToMonthDay(dueAt) {
+        const parsed = new Date(String(dueAt || "").trim());
+        if (Number.isNaN(parsed.getTime())) {
+          return "--/--";
+        }
+        const month = String(parsed.getMonth() + 1).padStart(2, "0");
+        const day = String(parsed.getDate()).padStart(2, "0");
+        return month + "/" + day;
+      }
       function renderTodos() {
         todoBodyEl.innerHTML = "";
         if (!Array.isArray(state.todos) || state.todos.length === 0) {
@@ -364,11 +411,30 @@ export function buildAdminPageTemplate() {
           titleInput.value = item.title;
           titleInput.addEventListener("focus", () => {
             state.selectedTodoId = item.id;
-            renderTodos();
+          });
+          titleInput.addEventListener("click", (event) => {
+            event.stopPropagation();
+            state.selectedTodoId = item.id;
           });
           titleTd.appendChild(titleInput);
 
           const actionTd = document.createElement("td");
+          actionTd.className = "row";
+
+          const dueInput = document.createElement("input");
+          dueInput.type = "date";
+          dueInput.value = toDateInputValue(item.dueAt);
+          dueInput.style.minWidth = "140px";
+          dueInput.style.maxWidth = "160px";
+          dueInput.addEventListener("focus", (event) => {
+            event.stopPropagation();
+            state.selectedTodoId = item.id;
+          });
+          dueInput.addEventListener("click", (event) => {
+            event.stopPropagation();
+            state.selectedTodoId = item.id;
+          });
+
           const saveBtn = document.createElement("button");
           saveBtn.textContent = "保存";
           saveBtn.addEventListener("click", async (event) => {
@@ -376,10 +442,14 @@ export function buildAdminPageTemplate() {
             try {
               await api("/api/admin/todos", {
                 method: "PUT",
-                body: JSON.stringify({ id: item.id, title: titleInput.value })
+                body: JSON.stringify({
+                  id: item.id,
+                  title: titleInput.value,
+                  dueAt: dateInputToDueAt(dueInput.value)
+                })
               });
               await loadTodos();
-              setStatus("待办标题已保存");
+              setStatus("待办已保存");
             } catch (error) {
               setStatus(error.message, true);
             }
@@ -401,9 +471,9 @@ export function buildAdminPageTemplate() {
             }
           });
 
+          actionTd.appendChild(dueInput);
           actionTd.appendChild(saveBtn);
           actionTd.appendChild(delBtn);
-          actionTd.className = "row";
 
           tr.appendChild(doneTd);
           tr.appendChild(titleTd);
@@ -648,9 +718,13 @@ export function buildAdminPageTemplate() {
         }
         await api("/api/admin/todos", {
           method: "POST",
-          body: JSON.stringify({ title })
+          body: JSON.stringify({
+            title,
+            dueAt: dateInputToDueAt($("newTodoDueDate").value)
+          })
         });
         $("newTodoTitle").value = "";
+        $("newTodoDueDate").value = "";
         await loadTodos();
         setStatus("待办已新增");
       }

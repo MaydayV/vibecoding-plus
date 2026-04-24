@@ -81,6 +81,10 @@ constexpr int64_t kConnectAttemptWatchdogMs = 20000;
 constexpr int64_t kReconnectPromptTimeoutMs = 15000;
 constexpr int64_t kTodoBootHoldMs = 600;
 constexpr int64_t kTodoBootDoubleClickWindowMs = 350;
+constexpr int64_t kNavDoubleClickWindowMs = 450;
+constexpr int64_t kNavLongPressMs = 2000;
+constexpr int64_t kNavShortPressMinMs = 15;
+constexpr int64_t kNavShortPressMaxMs = kNavLongPressMs - 1;
 constexpr uint32_t kConnectTaskStackSize = 6 * 1024;
 constexpr UBaseType_t kConnectTaskPriority = 2;
 // If no server connection is established within this window, enter deep sleep
@@ -157,27 +161,142 @@ std::string FormatTodoDateText(const tm& local_tm) {
            kWeekdaysCn[wday];
 }
 
+
+int DaysInMonth(int year, int month) {
+    static const int kDaysByMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12) {
+        return 0;
+    }
+    if (month != 2) {
+        return kDaysByMonth[month - 1];
+    }
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    return leap ? 29 : 28;
+}
+
+bool ParseDigits(const std::string& text, size_t start, size_t length, int& value) {
+    if (start + length > text.size() || length == 0) {
+        return false;
+    }
+    int parsed = 0;
+    for (size_t i = start; i < start + length; ++i) {
+        const unsigned char ch = static_cast<unsigned char>(text[i]);
+        if (!std::isdigit(ch)) {
+            return false;
+        }
+        parsed = parsed * 10 + (text[i] - '0');
+    }
+    value = parsed;
+    return true;
+}
+
+int64_t DaysFromCivil(int year, unsigned month, unsigned day) {
+    year -= month <= 2;
+    const int era = (year >= 0 ? year : year - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(year - era * 400);
+    const unsigned doy = (153 * (month + (month > 2 ? static_cast<unsigned>(-3) : 9)) + 2) / 5 + day - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
+bool ParseIsoDateMonthDay(const std::string& due_at, int& out_month, int& out_day) {
+    if (due_at.size() < 10 || due_at[4] != '-' || due_at[7] != '-') {
+        return false;
+    }
+
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    if (!ParseDigits(due_at, 0, 4, year) ||
+        !ParseDigits(due_at, 5, 2, month) ||
+        !ParseDigits(due_at, 8, 2, day)) {
+        return false;
+    }
+
+    const int max_day = DaysInMonth(year, month);
+    if (max_day == 0 || day < 1 || day > max_day) {
+        return false;
+    }
+
+    out_month = month;
+    out_day = day;
+
+    if (due_at.size() <= 10 || due_at[10] != 'T') {
+        return true;
+    }
+
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    if (due_at.size() < 16 || due_at[13] != ':' ||
+        !ParseDigits(due_at, 11, 2, hour) ||
+        !ParseDigits(due_at, 14, 2, minute)) {
+        return true;
+    }
+
+    size_t pos = 16;
+    if (pos < due_at.size() && due_at[pos] == ':') {
+        if (pos + 3 > due_at.size() || !ParseDigits(due_at, pos + 1, 2, second)) {
+            return true;
+        }
+        pos += 3;
+    }
+
+    if (pos < due_at.size() && due_at[pos] == '.') {
+        ++pos;
+        while (pos < due_at.size() && std::isdigit(static_cast<unsigned char>(due_at[pos]))) {
+            ++pos;
+        }
+    }
+
+    bool has_timezone = false;
+    int timezone_offset_seconds = 0;
+    if (pos < due_at.size() && (due_at[pos] == 'Z' || due_at[pos] == 'z')) {
+        has_timezone = true;
+    } else if (pos < due_at.size() && (due_at[pos] == '+' || due_at[pos] == '-')) {
+        const bool positive = due_at[pos] == '+';
+        int tz_hour = 0;
+        int tz_minute = 0;
+        if (pos + 6 <= due_at.size() && due_at[pos + 3] == ':' &&
+            ParseDigits(due_at, pos + 1, 2, tz_hour) &&
+            ParseDigits(due_at, pos + 4, 2, tz_minute)) {
+            has_timezone = true;
+            timezone_offset_seconds = tz_hour * 3600 + tz_minute * 60;
+            if (!positive) {
+                timezone_offset_seconds = -timezone_offset_seconds;
+            }
+        }
+    }
+
+    if (!has_timezone) {
+        return true;
+    }
+
+    const int64_t epoch_seconds =
+        DaysFromCivil(year, static_cast<unsigned>(month), static_cast<unsigned>(day)) * 86400 +
+        static_cast<int64_t>(hour) * 3600 +
+        static_cast<int64_t>(minute) * 60 +
+        static_cast<int64_t>(second) -
+        static_cast<int64_t>(timezone_offset_seconds);
+
+    time_t epoch_time = static_cast<time_t>(epoch_seconds);
+    tm local_tm = {};
+    if (localtime_r(&epoch_time, &local_tm) == nullptr) {
+        return true;
+    }
+
+    out_month = local_tm.tm_mon + 1;
+    out_day = local_tm.tm_mday;
+    return true;
+}
+
 std::string FormatTodoRightTimeText(const std::string& due_at) {
-    if (due_at.empty()) {
-        return "--:--";
+    int month = 0;
+    int day = 0;
+    if (!ParseIsoDateMonthDay(due_at, month, day)) {
+        return "--/--";
     }
-
-    std::string text = due_at;
-    const size_t t_pos = text.find('T');
-    if (t_pos == std::string::npos || t_pos + 6 > text.size()) {
-        return "--:--";
-    }
-
-    const std::string hh = text.substr(t_pos + 1, 2);
-    const std::string mm = text.substr(t_pos + 4, 2);
-    if (!std::isdigit(static_cast<unsigned char>(hh[0])) ||
-        !std::isdigit(static_cast<unsigned char>(hh[1])) ||
-        !std::isdigit(static_cast<unsigned char>(mm[0])) ||
-        !std::isdigit(static_cast<unsigned char>(mm[1]))) {
-        return "--:--";
-    }
-
-    return hh + ":" + mm;
+    return FormatTwoDigits(month) + "/" + FormatTwoDigits(day);
 }
 
 std::vector<std::string> WrapUtf8Lines(const std::string& text, size_t max_chars, size_t max_lines = 0) {
@@ -257,8 +376,8 @@ bool GetJsonBool(cJSON* root, const char* key, bool fallback) {
 
 LanMicApp::LanMicApp()
     : board_(Board::GetInstance()),
-      up_button_(TODO_UP_BUTTON_GPIO, false, 800),
-      down_button_(TODO_DOWN_BUTTON_GPIO, false, 800) {
+      up_button_(TODO_UP_BUTTON_GPIO, false, 2000, 2000),
+      down_button_(TODO_DOWN_BUTTON_GPIO, false, 2000, 2000) {
     wifi_event_group_ = xEventGroupCreate();
 }
 
@@ -613,14 +732,6 @@ void LanMicApp::ConfigureButtons() {
     cfg.intr_type = GPIO_INTR_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&cfg));
 
-    up_button_.OnClick([this]() {
-        ESP_LOGI(kTag, "UP click");
-        up_clicked_.store(true);
-    });
-    down_button_.OnClick([this]() {
-        ESP_LOGI(kTag, "DOWN click");
-        down_clicked_.store(true);
-    });
     up_button_.OnLongPress([this]() {
         ESP_LOGI(kTag, "UP long press");
         up_long_pressed_.store(true);
@@ -628,14 +739,6 @@ void LanMicApp::ConfigureButtons() {
     down_button_.OnLongPress([this]() {
         ESP_LOGI(kTag, "DOWN long press");
         down_long_pressed_.store(true);
-    });
-    up_button_.OnDoubleClick([this]() {
-        ESP_LOGI(kTag, "UP double click");
-        up_double_clicked_.store(true);
-    });
-    down_button_.OnDoubleClick([this]() {
-        ESP_LOGI(kTag, "DOWN double click");
-        down_double_clicked_.store(true);
     });
 }
 
@@ -3044,6 +3147,16 @@ void LanMicApp::Run() {
     bool todo_hold_started = false;
     int64_t last_todo_boot_release_ms = 0;
     bool todo_boot_short_pending = false;
+    bool up_nav_pressed_last = IsNavButtonPressed(TODO_UP_BUTTON_GPIO);
+    bool down_nav_pressed_last = IsNavButtonPressed(TODO_DOWN_BUTTON_GPIO);
+    bool up_nav_long_fallback_fired = false;
+    bool down_nav_long_fallback_fired = false;
+    bool up_nav_waiting_second_click = false;
+    bool down_nav_waiting_second_click = false;
+    int64_t up_nav_first_release_ms = 0;
+    int64_t down_nav_first_release_ms = 0;
+    int64_t up_nav_press_started_ms = 0;
+    int64_t down_nav_press_started_ms = 0;
     int64_t last_reconnect_ms = 0;
     int64_t reconnect_interval_ms = kReconnectIntervalMinMs;
     int64_t last_battery_poll_ms = 0;
@@ -3060,6 +3173,108 @@ void LanMicApp::Run() {
 
     while (true) {
         const int64_t now_ms = esp_timer_get_time() / 1000;
+        const bool up_nav_pressed_now = IsNavButtonPressed(TODO_UP_BUTTON_GPIO);
+        const bool down_nav_pressed_now = IsNavButtonPressed(TODO_DOWN_BUTTON_GPIO);
+        const bool allow_up_mode_double =
+            !todo_menu_open_ &&
+            !has_pending_transcript_ &&
+            (active_page_ == Page::Todo || active_page_ == Page::Summary) &&
+            (phase_ == Phase::Idle || phase_ == Phase::Error || phase_ == Phase::Running);
+        const bool allow_down_undo_double =
+            !todo_menu_open_ &&
+            !has_pending_transcript_ &&
+            voice_mode_ == VoiceMode::Normal &&
+            active_page_ == Page::Summary &&
+            (phase_ == Phase::Idle || phase_ == Phase::Running);
+        const int64_t up_double_window_ms = allow_up_mode_double ? kNavDoubleClickWindowMs : 0;
+        const int64_t down_double_window_ms = allow_down_undo_double ? kNavDoubleClickWindowMs : 0;
+        if (up_nav_pressed_now && !up_nav_pressed_last) {
+            up_nav_press_started_ms = now_ms;
+            up_nav_long_fallback_fired = false;
+        } else if (!up_nav_pressed_now && up_nav_pressed_last) {
+            const int64_t up_press_duration_ms = now_ms - up_nav_press_started_ms;
+            if (!up_nav_long_fallback_fired &&
+                up_press_duration_ms >= kNavShortPressMinMs &&
+                up_press_duration_ms <= kNavShortPressMaxMs) {
+                if (up_nav_waiting_second_click &&
+                    up_double_window_ms > 0 &&
+                    (now_ms - up_nav_first_release_ms) <= up_double_window_ms) {
+                    up_double_clicked_.store(true, std::memory_order_release);
+                    up_nav_waiting_second_click = false;
+                    up_nav_first_release_ms = 0;
+                } else {
+                    up_clicked_.store(true, std::memory_order_release);
+                    if (up_double_window_ms > 0) {
+                        up_nav_waiting_second_click = true;
+                        up_nav_first_release_ms = now_ms;
+                    } else {
+                        up_nav_waiting_second_click = false;
+                        up_nav_first_release_ms = 0;
+                    }
+                }
+            }
+            up_nav_press_started_ms = 0;
+            up_nav_long_fallback_fired = false;
+        } else if (up_nav_pressed_now &&
+                   !up_nav_long_fallback_fired &&
+                   up_nav_press_started_ms > 0 &&
+                   (now_ms - up_nav_press_started_ms) >= kNavLongPressMs) {
+            up_long_pressed_.store(true, std::memory_order_release);
+            up_nav_long_fallback_fired = true;
+            up_nav_waiting_second_click = false;
+            up_nav_first_release_ms = 0;
+        }
+        up_nav_pressed_last = up_nav_pressed_now;
+        if (up_nav_waiting_second_click &&
+            (up_double_window_ms <= 0 || (now_ms - up_nav_first_release_ms) > up_double_window_ms)) {
+            up_nav_waiting_second_click = false;
+            up_nav_first_release_ms = 0;
+        }
+
+        if (down_nav_pressed_now && !down_nav_pressed_last) {
+            down_nav_press_started_ms = now_ms;
+            down_nav_long_fallback_fired = false;
+        } else if (!down_nav_pressed_now && down_nav_pressed_last) {
+            const int64_t down_press_duration_ms = now_ms - down_nav_press_started_ms;
+            if (!down_nav_long_fallback_fired &&
+                down_press_duration_ms >= kNavShortPressMinMs &&
+                down_press_duration_ms <= kNavShortPressMaxMs) {
+                if (down_nav_waiting_second_click &&
+                    down_double_window_ms > 0 &&
+                    (now_ms - down_nav_first_release_ms) <= down_double_window_ms) {
+                    down_double_clicked_.store(true, std::memory_order_release);
+                    down_nav_waiting_second_click = false;
+                    down_nav_first_release_ms = 0;
+                } else {
+                    down_clicked_.store(true, std::memory_order_release);
+                    if (down_double_window_ms > 0) {
+                        down_nav_waiting_second_click = true;
+                        down_nav_first_release_ms = now_ms;
+                    } else {
+                        down_nav_waiting_second_click = false;
+                        down_nav_first_release_ms = 0;
+                    }
+                }
+            }
+            down_nav_press_started_ms = 0;
+            down_nav_long_fallback_fired = false;
+        } else if (down_nav_pressed_now &&
+                   !down_nav_long_fallback_fired &&
+                   down_nav_press_started_ms > 0 &&
+                   (now_ms - down_nav_press_started_ms) >= kNavLongPressMs) {
+            down_long_pressed_.store(true, std::memory_order_release);
+            down_nav_long_fallback_fired = true;
+            down_nav_waiting_second_click = false;
+            down_nav_first_release_ms = 0;
+        }
+        down_nav_pressed_last = down_nav_pressed_now;
+        if (down_nav_waiting_second_click &&
+            (down_double_window_ms <= 0 || (now_ms - down_nav_first_release_ms) > down_double_window_ms)) {
+            down_nav_waiting_second_click = false;
+            down_nav_first_release_ms = 0;
+        }
+
+
         if (todo_boot_short_pending &&
             (todo_menu_open_ ||
              has_pending_transcript_ ||
@@ -3177,11 +3392,34 @@ void LanMicApp::Run() {
         const bool down_click = down_clicked_.exchange(false) || down_double_click;
 
         if (up_double_click &&
-            !todo_menu_open_ &&
             !has_pending_transcript_ &&
             (active_page_ == Page::Todo || active_page_ == Page::Summary) &&
             (phase_ == Phase::Idle || phase_ == Phase::Error || phase_ == Phase::Running)) {
+            if (todo_menu_open_) {
+                todo_menu_open_ = false;
+            }
             SwitchPage(active_page_ == Page::Todo ? Page::Summary : Page::Todo);
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        if (down_double_click &&
+            !todo_menu_open_ &&
+            !has_pending_transcript_ &&
+            voice_mode_ == VoiceMode::Normal &&
+            active_page_ == Page::Summary &&
+            (phase_ == Phase::Idle || phase_ == Phase::Running)) {
+            if (IsServerConnected()) {
+                SendAction("action_undo");
+            } else {
+                disconnected_since_ms = now_ms;
+                reconnect_interval_ms = kReconnectIntervalMinMs;
+                last_reconnect_ms = now_ms;
+                StartConnectAttemptAsync();
+                status_text_ = "连接中";
+                hint_text_ = "正在重试主机...";
+                UpdateDisplay();
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
