@@ -615,6 +615,11 @@ elements.openConfigFolderButton.addEventListener("click", async () => {
 elements.pickCodexCwdButton.addEventListener("click", () => chooseDirectory(elements.codexCwd));
 elements.pickClaudeCwdButton.addEventListener("click", () => chooseDirectory(elements.claudeCwd));
 
+const refreshDevicesButton = document.querySelector("#refresh-devices-button");
+if (refreshDevicesButton) {
+  refreshDevicesButton.addEventListener("click", () => refreshDeviceAndStatus());
+}
+
 window.vibeApp.onState((payload) => {
   appState.service = payload.service;
   renderService();
