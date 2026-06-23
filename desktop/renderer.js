@@ -168,6 +168,15 @@ function setActiveTab(tabName) {
     panel.classList.toggle("hidden", !isActive);
     panel.classList.toggle("is-active", isActive);
   });
+
+  // Lazy-load admin iframe on first activation
+  if (tabName === "admin") {
+    const iframe = document.querySelector("#admin-iframe");
+    if (iframe && iframe.src === "about:blank") {
+      const port = appState.bootstrap?.form?.port || appState.service?.port || 8765;
+      iframe.src = `http://127.0.0.1:${port}/admin`;
+    }
+  }
 }
 
 function updateProviderVisibility() {

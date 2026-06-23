@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; connect-src ws://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:"
+      content="default-src 'self'; connect-src ws://127.0.0.1:* http://127.0.0.1:*; frame-src http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VibeCoding Plus</title>
@@ -131,6 +131,9 @@
                 </button>
                 <button class="tab-button" type="button" data-tab-trigger="advanced" aria-selected="false">
                   高级
+                </button>
+                <button class="tab-button" type="button" data-tab-trigger="admin" aria-selected="false">
+                  管理面板
                 </button>
               </div>
 
@@ -335,6 +338,19 @@
                           <span>Claude 减少权限确认</span>
                         </label>
                       </div>
+                    </div>
+                  </article>
+                </section>
+
+                <section class="settings-page hidden" data-tab-panel="admin">
+                  <article class="section-card">
+                    <div class="section-copy">
+                      <p class="section-kicker">Admin Panel</p>
+                      <h3>管理面板</h3>
+                      <p>待办管理、显示配置、苹果提醒同步、环境变量编辑。</p>
+                    </div>
+                    <div class="admin-iframe-wrap">
+                      <iframe id="admin-iframe" class="admin-iframe" src="about:blank"></iframe>
                     </div>
                   </article>
                 </section>
