@@ -338,11 +338,18 @@ function renderService() {
 
   if (service.status === "running") {
     refreshDeviceAndStatus();
+    if (!deviceRefreshTimer) {
+      deviceRefreshTimer = setInterval(refreshDeviceAndStatus, 5000);
+    }
   } else {
     elements.deviceCount.textContent = "0";
     elements.serviceUptime.textContent = "--";
     elements.serviceStt.textContent = "--";
     elements.deviceListSection.classList.add("hidden");
+    if (deviceRefreshTimer) {
+      clearInterval(deviceRefreshTimer);
+      deviceRefreshTimer = null;
+    }
   }
 }
 
