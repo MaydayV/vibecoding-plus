@@ -813,6 +813,44 @@ ipcMain.handle("desktop:open-config-folder", async () => {
   return buildBootstrap();
 });
 
+ipcMain.handle("desktop:get-devices", async () => {
+  const config = loadEffectiveConfig();
+  const port = config.port || 8765;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/admin/devices`);
+    return await res.json();
+  } catch {
+    return { ok: false, devices: [] };
+  }
+});
+
+ipcMain.handle("desktop:get-service-status", async () => {
+  const config = loadEffectiveConfig();
+  const port = config.port || 8765;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/admin/service-status`);
+    return await res.json();
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle("desktop:admin-api", async (_event, method, apiPath, body) => {
+  const config = loadEffectiveConfig();
+  const port = config.port || 8765;
+  const url = `http://127.0.0.1:${port}${apiPath}`;
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body && method !== "GET") {
+    opts.body = JSON.stringify(body);
+  }
+  try {
+    const res = await fetch(url, opts);
+    return await res.json();
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
+
 ipcMain.handle("desktop:save-config", async (_event, payload = {}) => {
   writeUserConfigValues(buildUserConfigUpdates(payload.form || {}));
   const { settings } = writeDesktopSettings(payload.desktopSettings || {});

@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("vibeApp", {
   updateDesktopSettings: (patch) => ipcRenderer.invoke("desktop:update-desktop-settings", patch),
   pickDirectory: (currentPath) => ipcRenderer.invoke("desktop:pick-directory", currentPath),
   openConfigFolder: () => ipcRenderer.invoke("desktop:open-config-folder"),
+  getDevices: () => ipcRenderer.invoke("desktop:get-devices"),
+  getServiceStatus: () => ipcRenderer.invoke("desktop:get-service-status"),
+  adminApi: (method, path, body) => ipcRenderer.invoke("desktop:admin-api", method, path, body),
   onState: (callback) => {
     if (typeof callback !== "function") {
       return;

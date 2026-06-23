@@ -2006,7 +2006,8 @@ const adminRoutes = createAdminRoutes({
   applyTodoSyncConfig: async () => applyTodoSyncRuntimeConfig(),
   applyDisplayConfig,
   deleteTodoRemindersByItems,
-  shutdown
+  shutdown,
+  getWss: () => wss
 });
 
 const KEEPALIVE_INTERVAL_MS = 30_000;

@@ -51,12 +51,29 @@
               <span class="status-label">CLI 状态</span>
               <strong id="cli-status">尚未连接</strong>
             </article>
+            <article class="status-card">
+              <span class="status-label">已连接设备</span>
+              <strong id="device-count">0</strong>
+            </article>
+            <article class="status-card">
+              <span class="status-label">运行时间</span>
+              <strong id="service-uptime">--</strong>
+            </article>
+            <article class="status-card">
+              <span class="status-label">语音识别</span>
+              <strong id="service-stt">--</strong>
+            </article>
           </div>
 
           <div class="notice-stack">
             <div id="service-message" class="notice notice-info"></div>
             <div id="config-issues" class="notice notice-warning hidden"></div>
             <div id="override-files" class="notice notice-subtle hidden"></div>
+          </div>
+
+          <div id="device-list-section" class="device-list-section hidden">
+            <h3>已连接设备</h3>
+            <div id="device-list" class="device-list"></div>
           </div>
         </section>
 

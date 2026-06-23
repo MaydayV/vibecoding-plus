@@ -236,6 +236,44 @@ export function createAdminRoutes(options) {
   }
 
   async function handleAdminApi(req, res, pathname) {
+    if (pathname === "/api/admin/devices") {
+      if (req.method === "GET") {
+        const devices = [];
+        const wss = typeof options.getWss === "function" ? options.getWss() : null;
+        if (wss) {
+          for (const client of wss.clients) {
+            const st = client.clientState;
+            if (!st || !st.authenticated) continue;
+            devices.push({
+              deviceId: st.deviceId || "unknown",
+              voiceMode: st.voiceMode || "normal",
+              remoteAddress: client._socket?.remoteAddress || ""
+            });
+          }
+        }
+        sendJsonResponse(res, 200, { ok: true, devices });
+        return true;
+      }
+    }
+
+    if (pathname === "/api/admin/service-status") {
+      if (req.method === "GET") {
+        const wss = typeof options.getWss === "function" ? options.getWss() : null;
+        const clientCount = wss ? wss.clients.size : 0;
+        sendJsonResponse(res, 200, {
+          ok: true,
+          uptime: process.uptime(),
+          clientCount,
+          sttProvider: config.sttProvider || "",
+          sendTarget: config.sendTarget || "",
+          discoveryEnabled: Boolean(config.discoveryEnabled),
+          port: config.port,
+          nodeVersion: process.version
+        });
+        return true;
+      }
+    }
+
     if (pathname === "/api/admin/todos") {
       if (req.method === "GET") {
         sendJsonResponse(res, 200, getTodoApiPayload());

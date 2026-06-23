@@ -6,6 +6,11 @@ const elements = {
   serviceMessage: document.querySelector("#service-message"),
   configIssues: document.querySelector("#config-issues"),
   overrideFiles: document.querySelector("#override-files"),
+  deviceCount: document.querySelector("#device-count"),
+  serviceUptime: document.querySelector("#service-uptime"),
+  serviceStt: document.querySelector("#service-stt"),
+  deviceListSection: document.querySelector("#device-list-section"),
+  deviceList: document.querySelector("#device-list"),
   form: document.querySelector("#settings-form"),
   tabButtons: [...document.querySelectorAll("[data-tab-trigger]")],
   tabPanels: [...document.querySelectorAll("[data-tab-panel]")],
@@ -321,6 +326,15 @@ function renderService() {
   elements.startServiceButton.disabled = service.status === "running" || service.status === "starting";
   elements.restartServiceButton.disabled = service.status === "starting";
   elements.stopServiceButton.disabled = service.status === "stopped" || service.status === "needs_setup";
+
+  if (service.status === "running") {
+    refreshDeviceAndStatus();
+  } else {
+    elements.deviceCount.textContent = "0";
+    elements.serviceUptime.textContent = "--";
+    elements.serviceStt.textContent = "--";
+    elements.deviceListSection.classList.add("hidden");
+  }
 }
 
 function renderLive() {
@@ -329,6 +343,54 @@ function renderLive() {
   elements.lastAssistantText.textContent = liveState.assistantText || "等待中";
   elements.cliLogTail.textContent =
     liveState.cliLogLines.length > 0 ? liveState.cliLogLines.join("\n") : "尚未连接。";
+}
+
+function formatUptime(seconds) {
+  if (!seconds || seconds < 1) return "--";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}小时${m}分`;
+  return `${m}分钟`;
+}
+
+let deviceRefreshTimer = null;
+
+async function refreshDeviceAndStatus() {
+  try {
+    const [devRes, statusRes] = await Promise.all([
+      window.vibeApp.getDevices(),
+      window.vibeApp.getServiceStatus()
+    ]);
+
+    if (devRes.ok) {
+      const devices = devRes.devices || [];
+      elements.deviceCount.textContent = String(devices.length);
+      if (devices.length > 0) {
+        elements.deviceListSection.classList.remove("hidden");
+        elements.deviceList.innerHTML = devices.map((d) => `
+          <div class="device-card">
+            <span class="device-id">${escapeHtml(d.deviceId)}</span>
+            <span class="device-meta">${escapeHtml(d.boardType || d.voiceMode || "")}</span>
+            <span class="device-ip">${escapeHtml(d.remoteAddress || "")}</span>
+          </div>
+        `).join("");
+      } else {
+        elements.deviceListSection.classList.add("hidden");
+        elements.deviceList.innerHTML = "";
+      }
+    }
+
+    if (statusRes.ok) {
+      elements.serviceUptime.textContent = formatUptime(statusRes.uptime);
+      elements.serviceStt.textContent = statusRes.sttProvider || "--";
+    }
+  } catch {
+    // silently ignore polling errors
+  }
+}
+
+function escapeHtml(str) {
+  return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function resetLiveConnection() {

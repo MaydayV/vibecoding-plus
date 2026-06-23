@@ -35,7 +35,8 @@
     "console": "node scripts/console.mjs",
     "vibe": "node scripts/vibe.mjs",
     "desktop:dev": "electron .",
-    "desktop:dist": "electron-builder --win nsis"
+    "desktop:dist": "electron-builder --win nsis",
+    "desktop:dist:mac": "electron-builder --mac dmg zip"
   },
   "engines": {
     "node": ">=20"
@@ -83,6 +84,21 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "perMachine": false
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build-assets/app-icon.png",
+      "category": "public.app-category.developer-tools",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
     }
   }
 }

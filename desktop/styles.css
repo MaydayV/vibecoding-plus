@@ -591,3 +591,51 @@ select:focus {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Device list */
+.device-list-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.device-list-section h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.device-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.device-id {
+  font-weight: 600;
+  color: var(--accent-2);
+}
+
+.device-meta {
+  color: var(--muted);
+}
+
+.device-ip {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: monospace;
+  font-size: 12px;
+}
