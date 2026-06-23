@@ -80,7 +80,7 @@ constexpr int64_t kServerSilenceTimeoutMs = 45000;
 constexpr int64_t kConnectAttemptWatchdogMs = 20000;
 constexpr int64_t kReconnectPromptTimeoutMs = 15000;
 constexpr int64_t kTodoBootHoldMs = 600;
-constexpr int64_t kTodoBootDoubleClickWindowMs = 350;
+constexpr int64_t kTodoBootDoubleClickWindowMs = 250;
 constexpr int64_t kNavDoubleClickWindowMs = 450;
 constexpr int64_t kNavLongPressMs = 2000;
 constexpr int64_t kNavShortPressMinMs = 15;
@@ -294,7 +294,7 @@ std::string FormatTodoRightTimeText(const std::string& due_at) {
     int month = 0;
     int day = 0;
     if (!ParseIsoDateMonthDay(due_at, month, day)) {
-        return "--/--";
+        return "";
     }
     return FormatTwoDigits(month) + "/" + FormatTwoDigits(day);
 }
@@ -425,8 +425,8 @@ bool LanMicApp::Initialize() {
     cli_log_lines_.clear();
     active_page_ = Page::Summary;
     voice_mode_ = VoiceMode::Normal;
-    display_todo_refresh_ms_ = 800;
-    display_coding_refresh_ms_ = 800;
+    display_todo_refresh_ms_ = 2000;
+    display_coding_refresh_ms_ = 2000;
     display_dark_style_ = false;
     hint_text_ = "长按UP打开菜单\n长按BOOT开始语音";
     phase_ = Phase::Idle;
@@ -3491,13 +3491,12 @@ void LanMicApp::Run() {
                     last_pressed = false;
                 }
             }
-            vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
         if (!IsServerConnected() &&
             !connect_attempt_running_.load(std::memory_order_acquire) &&
-            !offline_todo_mode_ &&
             (now_ms - last_reconnect_ms) >= reconnect_interval_ms) {
             last_reconnect_ms = now_ms;
             StartConnectAttemptAsync();
@@ -3511,33 +3510,14 @@ void LanMicApp::Run() {
             !has_pending_transcript_ &&
             phase_ == Phase::Idle &&
             (now_ms - disconnected_since_ms) >= kReconnectPromptTimeoutMs) {
-            reconnect_stuck_prompt_ = true;
+            // Enter offline todo mode silently — do NOT open the menu,
+            // so the main loop continues to reach the reconnect trigger
+            // and keeps retrying in the background.
             offline_todo_mode_ = true;
-            todo_menu_kind_ = TodoMenuKind::ReconnectStuck;
-            todo_menu_selected_item_ = 0;
-            todo_menu_open_ = true;
-            reconnect_prompt_started_ms = now_ms;
-            status_text_ = "无服务器";
-            hint_text_ = "请选择操作";
-            active_page_ = Page::Todo;
+            status_text_ = "重连中";
+            hint_text_ = "正在自动重试主机...";
+            network_state_ = IsWifiConnected() ? NetworkState::Wifi : NetworkState::Offline;
             UpdateDisplay();
-        }
-
-        // Time-based sleep: if no connection has been established within
-        // kNoConnectionSleepMs, enter deep sleep to save battery.
-        if (!IsServerConnected() &&
-            !connect_attempt_running_.load(std::memory_order_acquire) &&
-            !offline_todo_mode_ &&
-            (now_ms - disconnected_since_ms) >= kNoConnectionSleepMs) {
-            DisconnectWebSocket();
-            status_text_ = "无服务器";
-            hint_text_ = "按 BOOT 重试";
-            active_page_ = Page::Summary;
-            UpdateDisplay();
-            vTaskDelay(pdMS_TO_TICKS(800));
-            esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BOOT_BUTTON_GPIO), 0);
-            esp_sleep_enable_timer_wakeup(5ULL * 60 * 1000 * 1000);  // 5 minutes
-            esp_deep_sleep_start();
         }
 
         if (IsServerConnected()) {
@@ -3852,7 +3832,19 @@ void LanMicApp::Run() {
             continue;
         }
 
-        CapturePrerollFrame();
-        vTaskDelay(pdMS_TO_TICKS(1));
+        // Only capture preroll when voice input is plausible (connected +
+        // on a voice-capable page and no pending transcript).  On other
+        // pages or when disconnected, skip the 20 ms codec read so the
+        // CPU can idle longer between button polls.
+        const bool voice_ready = IsServerConnected() &&
+            !has_pending_transcript_ &&
+            !todo_menu_open_ &&
+            (active_page_ == Page::Summary || active_page_ == Page::Todo);
+        if (voice_ready) {
+            CapturePrerollFrame();
+            vTaskDelay(pdMS_TO_TICKS(1));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
     }
 }

@@ -606,11 +606,14 @@ void CustomLcdDisplay::refresh_task_loop() {
         if (!should_full && force_full) {
             should_full = true;
         }
-        if (!should_full && result.diff_ratio >= kForceFullDiffRatio) {
+        // For urgent refreshes (user-initiated page switches, PTT, etc.)
+        // prefer PARTIAL to keep latency low.  The periodic refresh cycle
+        // will eventually trigger a FULL refresh to clear any ghosting.
+        if (!should_full && !urgent && result.diff_ratio >= kForceFullDiffRatio) {
             should_full = true;
             ESP_LOGI(TAG, "[STRATEGY] diff_ratio>=20%% -> FULL");
         }
-        if (!should_full && partial_since_full >= kMaxPartialBeforeFull) {
+        if (!should_full && !urgent && partial_since_full >= kMaxPartialBeforeFull) {
             should_full = true;
         }
 

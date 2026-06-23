@@ -155,8 +155,8 @@ export function createAdminRoutes(options) {
 
   function getCurrentDisplayValues() {
     return {
-      todoRefreshMs: Math.min(10_000, Math.max(200, Number(process.env.DISPLAY_TODO_REFRESH_MS || config.displayTodoRefreshMs || 800))),
-      codingRefreshMs: Math.min(10_000, Math.max(200, Number(process.env.DISPLAY_CODING_REFRESH_MS || config.displayCodingRefreshMs || 800))),
+      todoRefreshMs: Math.min(10_000, Math.max(200, Number(process.env.DISPLAY_TODO_REFRESH_MS || config.displayTodoRefreshMs || 2000))),
+      codingRefreshMs: Math.min(10_000, Math.max(200, Number(process.env.DISPLAY_CODING_REFRESH_MS || config.displayCodingRefreshMs || 2000))),
       style: String(process.env.DISPLAY_STYLE || config.displayStyle || "light").trim().toLowerCase() === "dark" ? "dark" : "light"
     };
   }

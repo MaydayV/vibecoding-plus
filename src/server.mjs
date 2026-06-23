@@ -59,14 +59,14 @@ function getDisplayConfigValues(nextValues = {}) {
     10_000,
     Math.max(
       200,
-      Number(nextValues.todoRefreshMs ?? process.env.DISPLAY_TODO_REFRESH_MS ?? config.displayTodoRefreshMs ?? 800)
+      Number(nextValues.todoRefreshMs ?? process.env.DISPLAY_TODO_REFRESH_MS ?? config.displayTodoRefreshMs ?? 2000)
     )
   );
   const codingRefreshMs = Math.min(
     10_000,
     Math.max(
       200,
-      Number(nextValues.codingRefreshMs ?? process.env.DISPLAY_CODING_REFRESH_MS ?? config.displayCodingRefreshMs ?? 800)
+      Number(nextValues.codingRefreshMs ?? process.env.DISPLAY_CODING_REFRESH_MS ?? config.displayCodingRefreshMs ?? 2000)
     )
   );
   const style =
