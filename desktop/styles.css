@@ -14,6 +14,22 @@
   --shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
 }
 
+:root.light {
+  color-scheme: light;
+  --bg: #f4f6f8;
+  --bg-2: #ffffff;
+  --panel: rgba(255, 255, 255, 0.96);
+  --panel-2: rgba(245, 247, 250, 0.95);
+  --border: rgba(0, 0, 0, 0.1);
+  --text: #1a2b3c;
+  --muted: #5a6b7c;
+  --accent: #c88a00;
+  --accent-2: #0a8a76;
+  --danger: #d44a3a;
+  --warning: #c89a00;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -27,6 +43,14 @@ body {
     radial-gradient(circle at top left, rgba(87, 209, 191, 0.22), transparent 28%),
     radial-gradient(circle at top right, rgba(248, 184, 78, 0.16), transparent 24%),
     linear-gradient(180deg, #08131f 0%, #07111c 56%, #04090f 100%);
+  transition: background 0.3s, color 0.3s;
+}
+
+:root.light body {
+  background:
+    radial-gradient(circle at top left, rgba(87, 209, 191, 0.08), transparent 28%),
+    radial-gradient(circle at top right, rgba(248, 184, 78, 0.06), transparent 24%),
+    linear-gradient(180deg, #f8fafc 0%, #f4f6f8 56%, #eef0f2 100%);
 }
 
 .app-shell {

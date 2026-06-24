@@ -649,6 +649,28 @@ elements.openConfigFolderButton.addEventListener("click", async () => {
   renderService();
 });
 
+// Theme toggle
+const toggleThemeButton = document.querySelector("#toggle-theme-button");
+if (toggleThemeButton) {
+  const applyTheme = (theme) => {
+    if (theme === "light") {
+      document.documentElement.classList.add("light");
+      toggleThemeButton.textContent = "☀️";
+    } else {
+      document.documentElement.classList.remove("light");
+      toggleThemeButton.textContent = "🌙";
+    }
+  };
+  // Load saved theme
+  const savedTheme = localStorage.getItem("vibe-theme") || "dark";
+  applyTheme(savedTheme);
+  toggleThemeButton.addEventListener("click", () => {
+    const next = document.documentElement.classList.contains("light") ? "dark" : "light";
+    localStorage.setItem("vibe-theme", next);
+    applyTheme(next);
+  });
+}
+
 elements.pickCodexCwdButton.addEventListener("click", () => chooseDirectory(elements.codexCwd));
 elements.pickClaudeCwdButton.addEventListener("click", () => chooseDirectory(elements.claudeCwd));
 
