@@ -2,130 +2,61 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; connect-src ws://127.0.0.1:* http://127.0.0.1:*; frame-src http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:"
-    />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src ws://127.0.0.1:* http://127.0.0.1:*; frame-src http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VibeCoding Plus</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="app">
-      <!-- Sidebar -->
       <nav class="sidebar">
-        <div class="sidebar-brand">
-          <span class="brand-icon">◎</span>
-          <span class="brand-text">VibeCoding</span>
-        </div>
-
-        <div class="sidebar-status">
-          <span id="status-pill" class="status-pill">已停止</span>
-          <span id="service-mode" class="status-mode">Inject</span>
-        </div>
-
+        <div class="sidebar-brand"><span class="brand-icon">◎</span><span class="brand-text">VibeCoding</span></div>
+        <div class="sidebar-status"><span id="status-pill" class="status-pill">已停止</span><span id="service-mode" class="status-mode">Inject</span></div>
         <ul class="nav-list">
-          <li class="nav-item is-active" data-nav="status">
-            <span class="nav-icon">◉</span>
-            <span>状态</span>
-          </li>
-          <li class="nav-item" data-nav="devices">
-            <span class="nav-icon">⬡</span>
-            <span>设备</span>
-            <span id="nav-device-badge" class="nav-badge hidden">0</span>
-          </li>
-          <li class="nav-item" data-nav="settings">
-            <span class="nav-icon">⚙</span>
-            <span>设置</span>
-          </li>
-          <li class="nav-item" data-nav="admin">
-            <span class="nav-icon">☷</span>
-            <span>管理</span>
-          </li>
-          <li class="nav-item" data-nav="logs">
-            <span class="nav-icon">▤</span>
-            <span>日志</span>
-          </li>
+          <li class="nav-item is-active" data-nav="status"><span class="nav-icon">◉</span><span>状态</span></li>
+          <li class="nav-item" data-nav="devices"><span class="nav-icon">⬡</span><span>设备</span><span id="nav-device-badge" class="nav-badge hidden">0</span></li>
+          <li class="nav-item" data-nav="todo"><span class="nav-icon">☑</span><span>待办</span></li>
+          <li class="nav-item" data-nav="reminders"><span class="nav-icon">🔔</span><span>提醒同步</span></li>
+          <li class="nav-item" data-nav="display"><span class="nav-icon">◧</span><span>显示</span></li>
+          <li class="nav-item" data-nav="settings"><span class="nav-icon">⚙</span><span>设置</span></li>
+          <li class="nav-item" data-nav="logs"><span class="nav-icon">▤</span><span>日志</span></li>
         </ul>
-
         <div class="sidebar-footer">
           <div class="sidebar-actions">
-            <button id="start-service-button" class="btn btn-sm btn-primary" title="启动服务">▶</button>
-            <button id="restart-service-button" class="btn btn-sm" title="重启服务">↻</button>
-            <button id="stop-service-button" class="btn btn-sm btn-subtle" title="停止服务">■</button>
+            <button id="start-service-button" class="btn btn-sm btn-primary" title="启动">▶</button>
+            <button id="restart-service-button" class="btn btn-sm" title="重启">↻</button>
+            <button id="stop-service-button" class="btn btn-sm btn-subtle" title="停止">■</button>
           </div>
           <button id="open-config-folder-button" class="btn btn-sm btn-ghost">配置目录</button>
         </div>
       </nav>
 
-      <!-- Main content -->
       <main class="content">
-
-        <!-- Status panel -->
+        <!-- Status -->
         <section class="page is-active" data-page="status">
-          <header class="page-header">
-            <h1>服务状态</h1>
-          </header>
+          <header class="page-header"><h1>服务状态</h1></header>
           <div class="status-grid">
-            <div class="stat-card">
-              <span class="stat-label">当前模式</span>
-              <strong id="service-mode-display" class="stat-value">Inject</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">本地端口</span>
-              <strong id="service-port" class="stat-value">8765</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">CLI 状态</span>
-              <strong id="cli-status" class="stat-value">尚未连接</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">已连接设备</span>
-              <strong id="device-count" class="stat-value">0</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">运行时间</span>
-              <strong id="service-uptime" class="stat-value">--</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">语音识别</span>
-              <strong id="service-stt" class="stat-value">--</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">发现服务</span>
-              <strong id="service-discovery" class="stat-value">--</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">活跃连接</span>
-              <strong id="service-clients" class="stat-value">--</strong>
-            </div>
+            <div class="stat-card"><span class="stat-label">当前模式</span><strong id="service-mode-display" class="stat-value">Inject</strong></div>
+            <div class="stat-card"><span class="stat-label">本地端口</span><strong id="service-port" class="stat-value">8765</strong></div>
+            <div class="stat-card"><span class="stat-label">CLI 状态</span><strong id="cli-status" class="stat-value">尚未连接</strong></div>
+            <div class="stat-card"><span class="stat-label">已连接设备</span><strong id="device-count" class="stat-value">0</strong></div>
+            <div class="stat-card"><span class="stat-label">运行时间</span><strong id="service-uptime" class="stat-value">--</strong></div>
+            <div class="stat-card"><span class="stat-label">语音识别</span><strong id="service-stt" class="stat-value">--</strong></div>
+            <div class="stat-card"><span class="stat-label">发现服务</span><strong id="service-discovery" class="stat-value">--</strong></div>
+            <div class="stat-card"><span class="stat-label">活跃连接</span><strong id="service-clients" class="stat-value">--</strong></div>
           </div>
-
-          <div class="notice-stack">
-            <div id="service-message" class="notice"></div>
-            <div id="config-issues" class="notice notice-warn hidden"></div>
-          </div>
-
+          <div class="notice-stack"><div id="service-message" class="notice"></div><div id="config-issues" class="notice notice-warn hidden"></div></div>
           <div class="live-section">
             <h2>最近活动</h2>
             <div class="live-grid">
-              <div class="live-item">
-                <span class="live-label">最近转写</span>
-                <span id="last-transcript" class="live-value">还没有收到语音</span>
-              </div>
-              <div class="live-item">
-                <span class="live-label">最近用户指令</span>
-                <span id="last-user-text" class="live-value">等待中</span>
-              </div>
-              <div class="live-item">
-                <span class="live-label">最近 AI 回复</span>
-                <span id="last-assistant-text" class="live-value">等待中</span>
-              </div>
+              <div class="live-item"><span class="live-label">最近转写</span><span id="last-transcript" class="live-value">还没有收到语音</span></div>
+              <div class="live-item"><span class="live-label">用户指令</span><span id="last-user-text" class="live-value">等待中</span></div>
+              <div class="live-item"><span class="live-label">AI 回复</span><span id="last-assistant-text" class="live-value">等待中</span></div>
             </div>
           </div>
         </section>
 
-        <!-- Devices panel -->
+        <!-- Devices -->
         <section class="page" data-page="devices">
           <header class="page-header">
             <h1>设备管理</h1>
@@ -134,172 +65,88 @@
               <button id="refresh-devices-button" class="btn btn-sm btn-ghost">刷新</button>
             </div>
           </header>
-          <div id="device-list" class="device-list">
-            <div class="empty-state">暂无设备连接</div>
+          <div id="device-list" class="device-list"><div class="empty-state">暂无设备连接</div></div>
+        </section>
+
+        <!-- Todo (native) -->
+        <section class="page" data-page="todo">
+          <header class="page-header"><h1>待办管理</h1></header>
+          <div class="todo-add"><input id="todo-input" type="text" placeholder="添加新待办..." /><button id="todo-add-btn" class="btn btn-sm btn-primary">添加</button></div>
+          <div id="todo-list" class="todo-list"><div class="empty-state">暂无待办</div></div>
+        </section>
+
+        <!-- Reminders sync (native) -->
+        <section class="page" data-page="reminders">
+          <header class="page-header"><h1>苹果提醒同步</h1><div class="page-actions"><button id="sync-now-btn" class="btn btn-sm">立即同步</button></div></header>
+          <div id="sync-status" class="sync-status">加载中...</div>
+          <div id="reminder-lists" class="todo-list"></div>
+        </section>
+
+        <!-- Display config (native) -->
+        <section class="page" data-page="display">
+          <header class="page-header"><h1>显示配置</h1></header>
+          <div class="admin-section">
+            <h2>墨水屏刷新</h2>
+            <div class="display-config-grid">
+              <label class="field"><span>待办刷新间隔 (ms)</span><input id="cfg-todo-refresh" type="number" min="200" max="10000" step="100" /></label>
+              <label class="field"><span>编程刷新间隔 (ms)</span><input id="cfg-coding-refresh" type="number" min="200" max="10000" step="100" /></label>
+            </div>
+            <label class="field"><span>显示风格</span>
+              <select id="cfg-style"><option value="light">浅色</option><option value="dark">深色</option></select>
+            </label>
+            <div style="margin-top:12px"><button id="save-display-btn" class="btn btn-primary">保存显示配置</button></div>
           </div>
         </section>
 
-        <!-- Settings panel -->
+        <!-- Settings -->
         <section class="page" data-page="settings">
-          <header class="page-header">
-            <h1>设置</h1>
-          </header>
+          <header class="page-header"><h1>设置</h1></header>
           <div class="settings-tabs">
             <button class="stab is-active" data-stab="basics">基础</button>
             <button class="stab" data-stab="speech">识别</button>
             <button class="stab" data-stab="workspace">工作区</button>
             <button class="stab" data-stab="advanced">高级</button>
           </div>
-
           <form id="settings-form" class="settings-form">
             <div class="stab-panel is-active" data-stab-panel="basics">
               <div class="field-row">
-                <label class="field">
-                  <span>发送目标</span>
-                  <select id="send-target" name="sendTarget">
-                    <option value="text_injector">输入注入</option>
-                    <option value="codex_exec">Codex</option>
-                    <option value="claude_code">Claude Code</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>发送时机</span>
-                  <select id="transcript-delivery-mode" name="transcriptDeliveryMode">
-                    <option value="confirm_on_device">设备确认后发送</option>
-                    <option value="immediate">识别完成立即发送</option>
-                  </select>
-                </label>
+                <label class="field"><span>发送目标</span><select id="send-target" name="sendTarget"><option value="text_injector">输入注入</option><option value="codex_exec">Codex</option><option value="claude_code">Claude Code</option></select></label>
+                <label class="field"><span>发送时机</span><select id="transcript-delivery-mode" name="transcriptDeliveryMode"><option value="confirm_on_device">设备确认后发送</option><option value="immediate">识别完成立即发送</option></select></label>
               </div>
-              <label class="field" data-mode-visible="text_injector">
-                <span>输入注入方式</span>
-                <select id="text-injection-mode" name="textInjectionMode">
-                  <option value="type_and_enter">输入并回车</option>
-                  <option value="type_only">仅输入文本</option>
-                </select>
-              </label>
+              <label class="field" data-mode-visible="text_injector"><span>输入注入方式</span><select id="text-injection-mode" name="textInjectionMode"><option value="type_and_enter">输入并回车</option><option value="type_only">仅输入文本</option></select></label>
             </div>
-
             <div class="stab-panel hidden" data-stab-panel="speech">
-              <label class="field">
-                <span>语音识别提供商</span>
-                <select id="stt-provider" name="sttProvider">
-                  <option value="volcengine">Volcengine</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="whisper_cpp">whisper.cpp (local)</option>
-                  <option value="qwen_asr">Qwen3-ASR</option>
-                </select>
-              </label>
-
-              <div class="provider-section" data-provider-section="openai">
-                <label class="field"><span>API Key</span><input id="openai-api-key" name="openaiApiKey" type="password" autocomplete="off" /></label>
-                <label class="field"><span>模型</span><input id="openai-model" name="openaiModel" type="text" placeholder="whisper-1" /></label>
-              </div>
-
-              <div class="provider-section" data-provider-section="volcengine">
-                <label class="field"><span>App Key</span><input id="volcengine-app-key" name="volcengineAppKey" type="password" autocomplete="off" /></label>
-                <label class="field"><span>Access Key</span><input id="volcengine-access-key" name="volcengineAccessKey" type="password" autocomplete="off" /></label>
-              </div>
-
-              <div class="provider-section" data-provider-section="whisper_cpp">
-                <label class="field"><span>模型路径</span><input id="whisper-cpp-model-path" name="whisperCppModelPath" type="text" placeholder="/path/to/ggml-model.bin" /></label>
-                <div class="field-row">
-                  <label class="field"><span>语言</span><input id="whisper-cpp-language" name="whisperCppLanguage" type="text" placeholder="zh" /></label>
-                  <label class="field"><span>线程数</span><input id="whisper-cpp-threads" name="whisperCppThreads" type="number" min="1" step="1" placeholder="4" /></label>
-                </div>
-                <label class="field"><span>命令</span><input id="whisper-cpp-command" name="whisperCppCommand" type="text" placeholder="whisper-cli" /></label>
-                <label class="field"><span>额外参数</span><input id="whisper-cpp-extra-args" name="whisperCppExtraArgs" type="text" placeholder="-fa -np" /></label>
-              </div>
-
-              <div class="provider-section" data-provider-section="qwen_asr">
-                <label class="field"><span>API Key</span><input id="qwen-asr-api-key" name="qwenAsrApiKey" type="password" autocomplete="off" /></label>
-                <div class="field-row">
-                  <label class="field"><span>模型</span><input id="qwen-asr-model" name="qwenAsrModel" type="text" placeholder="qwen3-asr-flash-realtime" /></label>
-                  <label class="field"><span>语言</span><input id="qwen-asr-language" name="qwenAsrLanguage" type="text" placeholder="zh" /></label>
-                </div>
-                <div class="field-row">
-                  <label class="field"><span>采样率</span><input id="qwen-asr-sample-rate" name="qwenAsrSampleRate" type="number" min="8000" step="1" placeholder="16000" /></label>
-                  <label class="field"><span>Base URL</span><input id="qwen-asr-realtime-base-url" name="qwenAsrRealtimeBaseUrl" type="text" placeholder="wss://dashscope.aliyuncs.com/..." /></label>
-                </div>
-                <label class="field"><span>识别提示词</span><input id="qwen-asr-prompt" name="qwenAsrPrompt" type="text" placeholder="例如：只输出中文转写文本" /></label>
-              </div>
-
+              <label class="field"><span>语音识别提供商</span><select id="stt-provider" name="sttProvider"><option value="volcengine">Volcengine</option><option value="openai">OpenAI</option><option value="whisper_cpp">whisper.cpp</option><option value="qwen_asr">Qwen3-ASR</option></select></label>
+              <div class="provider-section" data-provider-section="openai"><label class="field"><span>API Key</span><input id="openai-api-key" name="openaiApiKey" type="password" autocomplete="off" /></label><label class="field"><span>模型</span><input id="openai-model" name="openaiModel" type="text" placeholder="whisper-1" /></label></div>
+              <div class="provider-section" data-provider-section="volcengine"><label class="field"><span>App Key</span><input id="volcengine-app-key" name="volcengineAppKey" type="password" autocomplete="off" /></label><label class="field"><span>Access Key</span><input id="volcengine-access-key" name="volcengineAccessKey" type="password" autocomplete="off" /></label></div>
+              <div class="provider-section" data-provider-section="whisper_cpp"><label class="field"><span>模型路径</span><input id="whisper-cpp-model-path" name="whisperCppModelPath" type="text" /></label><div class="field-row"><label class="field"><span>语言</span><input id="whisper-cpp-language" name="whisperCppLanguage" type="text" placeholder="zh" /></label><label class="field"><span>线程</span><input id="whisper-cpp-threads" name="whisperCppThreads" type="number" placeholder="4" /></label></div><label class="field"><span>命令</span><input id="whisper-cpp-command" name="whisperCppCommand" type="text" placeholder="whisper-cli" /></label><label class="field"><span>参数</span><input id="whisper-cpp-extra-args" name="whisperCppExtraArgs" type="text" /></label></div>
+              <div class="provider-section" data-provider-section="qwen_asr"><label class="field"><span>API Key</span><input id="qwen-asr-api-key" name="qwenAsrApiKey" type="password" autocomplete="off" /></label><div class="field-row"><label class="field"><span>模型</span><input id="qwen-asr-model" name="qwenAsrModel" type="text" placeholder="qwen3-asr-flash-realtime" /></label><label class="field"><span>语言</span><input id="qwen-asr-language" name="qwenAsrLanguage" type="text" placeholder="zh" /></label></div><div class="field-row"><label class="field"><span>采样率</span><input id="qwen-asr-sample-rate" name="qwenAsrSampleRate" type="number" placeholder="16000" /></label><label class="field"><span>Base URL</span><input id="qwen-asr-realtime-base-url" name="qwenAsrRealtimeBaseUrl" type="text" /></label></div><label class="field"><span>提示词</span><input id="qwen-asr-prompt" name="qwenAsrPrompt" type="text" /></label></div>
               <label class="field"><span>设备共享密钥</span><input id="lan-shared-secret" name="lanSharedSecret" type="password" autocomplete="off" /></label>
             </div>
-
             <div class="stab-panel hidden" data-stab-panel="workspace">
-              <label class="field"><span>Codex 工作目录</span>
-                <div class="path-input"><input id="codex-cwd" name="codexCwd" type="text" /><button id="pick-codex-cwd-button" class="btn btn-sm" type="button">选择</button></div>
-              </label>
-              <label class="field"><span>Claude 工作目录</span>
-                <div class="path-input"><input id="claude-cwd" name="claudeCwd" type="text" /><button id="pick-claude-cwd-button" class="btn btn-sm" type="button">选择</button></div>
-              </label>
-              <div class="toggle-row">
-                <label class="toggle"><input id="auto-launch" name="autoLaunch" type="checkbox" /><span>开机自启</span></label>
-                <label class="toggle"><input id="launch-to-tray" name="launchToTray" type="checkbox" /><span>隐藏启动</span></label>
-                <label class="toggle"><input id="close-to-tray" name="closeToTray" type="checkbox" /><span>关闭时最小化</span></label>
-              </div>
-              <div class="meta-info">
-                <div><span>用户配置</span><code id="user-config-path"></code></div>
-                <div><span>桌面设置</span><code id="desktop-settings-path"></code></div>
-              </div>
+              <label class="field"><span>Codex 工作目录</span><div class="path-input"><input id="codex-cwd" name="codexCwd" type="text" /><button id="pick-codex-cwd-button" class="btn btn-sm" type="button">选择</button></div></label>
+              <label class="field"><span>Claude 工作目录</span><div class="path-input"><input id="claude-cwd" name="claudeCwd" type="text" /><button id="pick-claude-cwd-button" class="btn btn-sm" type="button">选择</button></div></label>
+              <div class="toggle-row"><label class="toggle"><input id="auto-launch" name="autoLaunch" type="checkbox" /><span>开机自启</span></label><label class="toggle"><input id="launch-to-tray" name="launchToTray" type="checkbox" /><span>隐藏启动</span></label><label class="toggle"><input id="close-to-tray" name="closeToTray" type="checkbox" /><span>关闭时最小化</span></label></div>
+              <div class="meta-info"><div><span>用户配置</span><code id="user-config-path"></code></div><div><span>桌面设置</span><code id="desktop-settings-path"></code></div></div>
             </div>
-
             <div class="stab-panel hidden" data-stab-panel="advanced">
               <label class="toggle"><input id="codex-skip-git-repo-check" name="codexSkipGitRepoCheck" type="checkbox" /><span>Codex 跳过 Git 仓库检查</span></label>
               <label class="toggle"><input id="claude-dangerously-skip-permissions" name="claudeDangerouslySkipPermissions" type="checkbox" /><span>Claude 减少权限确认</span></label>
             </div>
-
-            <div class="form-footer">
-              <button id="save-settings-button" type="submit" class="btn btn-primary">保存并应用</button>
-            </div>
+            <div class="form-footer"><button id="save-settings-button" type="submit" class="btn btn-primary">保存并应用</button></div>
           </form>
         </section>
 
-        <!-- Admin panel -->
-        <section class="page" data-page="admin">
-          <header class="page-header">
-            <h1>管理面板</h1>
-          </header>
-          <div class="admin-iframe-wrap">
-            <iframe id="admin-iframe" class="admin-iframe" src="about:blank"></iframe>
-          </div>
-        </section>
-
-        <!-- Logs panel -->
+        <!-- Logs -->
         <section class="page" data-page="logs">
-          <header class="page-header">
-            <h1>日志</h1>
-          </header>
+          <header class="page-header"><h1>日志</h1></header>
           <div class="log-columns">
-            <div class="log-col">
-              <div class="log-col-header">
-                <h3>CLI 事件</h3>
-                <select id="log-filter-cli" class="log-filter">
-                  <option value="all">全部</option>
-                  <option value="transcript">转写</option>
-                  <option value="user">用户指令</option>
-                  <option value="assistant">AI 回复</option>
-                </select>
-              </div>
-              <pre id="cli-log-tail" class="log-box">尚未连接。</pre>
-            </div>
-            <div class="log-col">
-              <div class="log-col-header">
-                <h3>服务日志</h3>
-                <select id="log-filter-service" class="log-filter">
-                  <option value="all">全部</option>
-                  <option value="device">设备事件</option>
-                  <option value="bridge">服务进程</option>
-                </select>
-              </div>
-              <pre id="service-log-tail" class="log-box">等待启动。</pre>
-            </div>
+            <div class="log-col"><div class="log-col-header"><h3>CLI 事件</h3><select id="log-filter-cli" class="log-filter"><option value="all">全部</option><option value="transcript">转写</option><option value="user">指令</option><option value="assistant">AI</option></select></div><pre id="cli-log-tail" class="log-box">尚未连接。</pre></div>
+            <div class="log-col"><div class="log-col-header"><h3>服务日志</h3><select id="log-filter-service" class="log-filter"><option value="all">全部</option><option value="device">设备</option><option value="bridge">进程</option></select></div><pre id="service-log-tail" class="log-box">等待启动。</pre></div>
           </div>
         </section>
-
       </main>
     </div>
-
     <script type="module" src="./renderer.js"></script>
   </body>
 </html>
