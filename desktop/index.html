@@ -71,8 +71,13 @@
         <!-- Todo (native) -->
         <section class="page" data-page="todo">
           <header class="page-header"><h1>待办管理</h1></header>
-          <div class="todo-add"><input id="todo-input" type="text" placeholder="添加新待办..." /><button id="todo-add-btn" class="btn btn-sm btn-primary">添加</button></div>
+          <div id="todo-status" class="operation-status hidden"></div>
+          <div class="todo-add"><input id="todo-input" type="text" placeholder="添加新待办..." /><input id="todo-due-date" class="todo-date" type="date" /><button id="todo-add-btn" class="btn btn-sm btn-primary">添加</button></div>
           <div id="todo-list" class="todo-list"><div class="empty-state">暂无待办</div></div>
+          <div class="todo-archive">
+            <div class="subsection-title">已完成 / 归档</div>
+            <div id="todo-archive-list" class="todo-list compact"><div class="empty-state">暂无归档待办</div></div>
+          </div>
         </section>
 
         <!-- Reminders sync (native) -->
@@ -85,6 +90,7 @@
         <!-- Display config (native) -->
         <section class="page" data-page="display">
           <header class="page-header"><h1>显示配置</h1></header>
+          <div id="display-status" class="operation-status hidden"></div>
           <div class="admin-section">
             <h2>墨水屏刷新</h2>
             <div class="display-config-grid">
@@ -101,6 +107,7 @@
         <!-- Settings -->
         <section class="page" data-page="settings">
           <header class="page-header"><h1>设置</h1></header>
+          <div id="settings-status" class="operation-status hidden"></div>
           <div class="settings-tabs">
             <button class="stab is-active" data-stab="basics">基础</button>
             <button class="stab" data-stab="speech">识别</button>

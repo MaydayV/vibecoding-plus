@@ -307,6 +307,7 @@ body {
 
 /* ===== Admin native pages ===== */
 .todo-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.todo-list.compact { margin-bottom: 0; }
 
 .todo-item {
   display: flex;
@@ -321,9 +322,27 @@ body {
 .todo-item.completed { opacity: 0.5; text-decoration: line-through; }
 .todo-check { cursor: pointer; width: 14px; height: 14px; accent-color: var(--ink); }
 .todo-text { flex: 1; }
-.todo-due { font-size: 11px; color: var(--ink-3); min-width: 50px; text-align: right; }
+.todo-due { font-size: 11px; color: var(--ink-3); min-width: 68px; text-align: right; }
+.todo-source {
+  font-size: 10px;
+  color: var(--ink-3);
+  border: 1px solid var(--border-light);
+  border-radius: 2px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
 .todo-del { cursor: pointer; color: var(--ink-light); font-size: 14px; border: none; background: none; padding: 0 2px; }
 .todo-del:hover { color: var(--danger); }
+.todo-action {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  border-radius: 2px;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+.todo-action:hover { background: var(--paper-3); color: var(--ink); }
 
 .todo-add {
   display: flex;
@@ -331,7 +350,25 @@ body {
   margin-bottom: 12px;
 }
 .todo-add input { flex: 1; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; font-family: var(--font); background: var(--paper); color: var(--ink); outline: none; }
+.todo-add .todo-date { flex: 0 0 132px; color: var(--ink-2); }
 .todo-add input:focus { border-color: var(--ink-2); }
+.todo-archive { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-light); }
+.subsection-title { font-size: 11px; color: var(--ink-3); margin-bottom: 6px; }
+
+.operation-status {
+  padding: 6px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.operation-status.is-error {
+  border-color: #d09080;
+  background: #f5ded8;
+  color: var(--danger);
+}
 
 .admin-section { margin-bottom: 20px; }
 .admin-section h2 { font-size: 14px; font-weight: 600; margin-bottom: 10px; color: var(--ink-2); }

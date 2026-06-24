@@ -62,8 +62,11 @@ const el = {
   logFilterCli: document.querySelector("#log-filter-cli"),
   logFilterSvc: document.querySelector("#log-filter-service"),
   todoInput: document.querySelector("#todo-input"),
+  todoDueDate: document.querySelector("#todo-due-date"),
   todoAddBtn: document.querySelector("#todo-add-btn"),
   todoList: document.querySelector("#todo-list"),
+  todoArchiveList: document.querySelector("#todo-archive-list"),
+  todoStatus: document.querySelector("#todo-status"),
   syncNowBtn: document.querySelector("#sync-now-btn"),
   syncStatus: document.querySelector("#sync-status"),
   reminderLists: document.querySelector("#reminder-lists"),
@@ -71,6 +74,8 @@ const el = {
   cfgCodingRefresh: document.querySelector("#cfg-coding-refresh"),
   cfgStyle: document.querySelector("#cfg-style"),
   saveDisplayBtn: document.querySelector("#save-display-btn"),
+  displayStatus: document.querySelector("#display-status"),
+  settingsStatus: document.querySelector("#settings-status"),
 };
 
 const live = { transcript: "", userText: "", assistantText: "", cliStatus: "尚未连接", cliLogLines: [] };
@@ -79,10 +84,48 @@ let deviceTimer = null;
 
 // ─── Helpers ───
 const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const escAttr = (s) => esc(s).replace(/"/g, "&quot;");
 const modeLabel = (m) => m === "claude_code" ? "Claude Code" : m === "codex_exec" ? "Codex" : "输入注入";
 const statusLabel = (s) => ({ running: "运行中", starting: "启动中", needs_setup: "待配置", error: "异常" }[s] || "已停止");
 const formatUp = (s) => { if (!s || s < 1) return "--"; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h > 0 ? `${h}小时${m}分` : `${m}分钟`; };
 const formatTm = (ts) => { if (!ts) return ""; const d = new Date(ts); return isNaN(d) ? "" : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+const formatDateTime = (ts) => {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (isNaN(d)) return "";
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+function setInlineStatus(target, message, isError = false) {
+  if (!target) return;
+  target.textContent = message || "";
+  target.classList.toggle("hidden", !message);
+  target.classList.toggle("is-error", Boolean(isError));
+}
+
+async function adminApi(method, path, body) {
+  const res = await window.vibeApp.adminApi(method, path, body);
+  if (!res?.ok) {
+    throw new Error(res?.error || "操作失败，请确认服务已启动");
+  }
+  return res;
+}
+
+function dateInputToDueAt(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const parsed = new Date(`${text}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+}
+
+function renderTodoItem(item, { archived = false } = {}) {
+  const due = item.dueAt ? `<span class="todo-due">${esc(formatDateTime(item.dueAt))}</span>` : '<span class="todo-due"></span>';
+  const source = item.appleId ? '<span class="todo-source">提醒</span>' : "";
+  const primary = archived
+    ? `<button class="todo-action" data-action="restore" data-id="${escAttr(item.id)}">恢复</button>`
+    : `<input class="todo-check" type="checkbox" ${item.completed ? "checked" : ""} data-id="${escAttr(item.id)}" />`;
+  return `<div class="todo-item ${item.completed ? "completed" : ""}" data-id="${escAttr(item.id)}">${primary}<span class="todo-text">${esc(item.title)}</span>${source}${due}<button class="todo-del" title="删除" data-action="delete" data-id="${escAttr(item.id)}">×</button></div>`;
+}
 
 // ─── Navigation ───
 document.querySelectorAll(".nav-item").forEach((item) => {
@@ -166,61 +209,145 @@ async function refreshDevices() {
 // ─── Todo (native) ───
 async function loadTodos() {
   try {
-    const res = await window.vibeApp.adminApi("GET", "/api/admin/todos");
-    if (!res.ok) return;
+    const res = await adminApi("GET", "/api/admin/todos");
     const items = res.snapshot?.items || [];
-    el.todoList.innerHTML = items.length ? items.map((t, i) => `<div class="todo-item ${t.completed ? "completed" : ""}"><input class="todo-check" type="checkbox" ${t.completed ? "checked" : ""} data-idx="${i}" /><span class="todo-text">${esc(t.title)}</span><span class="todo-due">${t.dueAt ? formatTm(t.dueAt) : ""}</span><button class="todo-del" data-idx="${i}">×</button></div>`).join("") : '<div class="empty-state">暂无待办</div>';
-    el.todoList.querySelectorAll(".todo-check").forEach((cb) => cb.addEventListener("change", async () => { await window.vibeApp.adminApi("PUT", "/api/admin/todos", { index: Number(cb.dataset.idx), completed: cb.checked }); loadTodos(); }));
-    el.todoList.querySelectorAll(".todo-del").forEach((btn) => btn.addEventListener("click", async () => { await window.vibeApp.adminApi("DELETE", "/api/admin/todos", { index: Number(btn.dataset.idx) }); loadTodos(); }));
-  } catch {}
+    const archiveItems = res.snapshot?.archiveItems || [];
+    el.todoList.innerHTML = items.length ? items.map((t) => renderTodoItem(t)).join("") : '<div class="empty-state">暂无待办</div>';
+    el.todoArchiveList.innerHTML = archiveItems.length ? archiveItems.map((t) => renderTodoItem(t, { archived: true })).join("") : '<div class="empty-state">暂无归档待办</div>';
+    el.todoList.querySelectorAll(".todo-check").forEach((cb) => cb.addEventListener("change", async () => {
+      cb.disabled = true;
+      try {
+        await adminApi("PUT", "/api/admin/todos", { id: cb.dataset.id, completed: cb.checked });
+        await loadTodos();
+        setInlineStatus(el.todoStatus, cb.checked ? "已完成，设备列表会在下一次刷新时更新" : "已恢复为未完成");
+      } catch (error) {
+        cb.checked = !cb.checked;
+        setInlineStatus(el.todoStatus, error.message, true);
+      } finally {
+        cb.disabled = false;
+      }
+    }));
+    el.todoList.querySelectorAll(".todo-del").forEach((btn) => btn.addEventListener("click", () => deleteTodo(btn.dataset.id)));
+    el.todoArchiveList.querySelectorAll("[data-action='restore']").forEach((btn) => btn.addEventListener("click", () => restoreTodo(btn.dataset.id)));
+    el.todoArchiveList.querySelectorAll("[data-action='delete']").forEach((btn) => btn.addEventListener("click", () => deleteTodo(btn.dataset.id)));
+  } catch (error) {
+    setInlineStatus(el.todoStatus, error.message, true);
+  }
 }
 
 el.todoAddBtn?.addEventListener("click", async () => {
   const title = el.todoInput.value.trim();
-  if (!title) return;
-  await window.vibeApp.adminApi("POST", "/api/admin/todos", { title });
-  el.todoInput.value = "";
-  loadTodos();
+  if (!title) {
+    setInlineStatus(el.todoStatus, "请输入待办内容", true);
+    return;
+  }
+  el.todoAddBtn.disabled = true;
+  try {
+    await adminApi("POST", "/api/admin/todos", { title, dueAt: dateInputToDueAt(el.todoDueDate.value) });
+    el.todoInput.value = "";
+    el.todoDueDate.value = "";
+    await loadTodos();
+    setInlineStatus(el.todoStatus, "待办已添加，设备会在下一次待办刷新时显示");
+  } catch (error) {
+    setInlineStatus(el.todoStatus, error.message, true);
+  } finally {
+    el.todoAddBtn.disabled = false;
+  }
 });
 el.todoInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); el.todoAddBtn.click(); } });
+
+async function restoreTodo(id) {
+  if (!id) return;
+  try {
+    await adminApi("PUT", "/api/admin/todos", { id, completed: false });
+    await loadTodos();
+    setInlineStatus(el.todoStatus, "待办已恢复");
+  } catch (error) {
+    setInlineStatus(el.todoStatus, error.message, true);
+  }
+}
+
+async function deleteTodo(id) {
+  if (!id) {
+    setInlineStatus(el.todoStatus, "待办不存在或已刷新", true);
+    return;
+  }
+  if (!confirm("确认删除这条待办吗？已同步到苹果提醒的项目也会尝试同步删除。")) {
+    return;
+  }
+  try {
+    const result = await adminApi("DELETE", "/api/admin/todos", { id });
+    await loadTodos();
+    const remoteDelete = result.remoteDelete || {};
+    if (remoteDelete.failed > 0) {
+      setInlineStatus(el.todoStatus, `本地已删除，提醒事项删除失败 ${remoteDelete.failed} 条`, true);
+    } else if (remoteDelete.deleted > 0) {
+      setInlineStatus(el.todoStatus, `待办已删除，并同步删除提醒事项 ${remoteDelete.deleted} 条`);
+    } else {
+      setInlineStatus(el.todoStatus, "待办已删除");
+    }
+  } catch (error) {
+    setInlineStatus(el.todoStatus, error.message, true);
+  }
+}
 
 // ─── Reminders sync (native) ───
 async function loadSyncStatus() {
   try {
-    const res = await window.vibeApp.adminApi("GET", "/api/admin/todo-sync");
+    const res = await adminApi("GET", "/api/admin/todo-sync");
     if (res.ok) {
       const st = res.status || {};
       el.syncStatus.innerHTML = `同步状态：${st.enabled ? "已启用" : "已禁用"} · 上次同步：${st.lastSyncAt ? formatTm(st.lastSyncAt) : "从未"} · 同步次数：${st.syncCount ?? 0}${st.lastError ? ` · <span style="color:var(--danger)">错误：${esc(st.lastError)}</span>` : ""}`;
     }
-    const lists = await window.vibeApp.adminApi("GET", "/api/admin/todo-sync/lists");
+    const lists = await adminApi("GET", "/api/admin/todo-sync/lists");
     if (lists.ok) {
       el.reminderLists.innerHTML = (lists.lists || []).map((l) => `<div class="todo-item"><span class="todo-text">📋 ${esc(l.title)}</span><span class="todo-due">${l.reminderCount} 条</span></div>`).join("") || '<div class="empty-state">无提醒列表</div>';
     }
-  } catch {}
+  } catch (error) {
+    el.syncStatus.textContent = error.message;
+  }
 }
 
 el.syncNowBtn?.addEventListener("click", async () => {
   el.syncNowBtn.disabled = true; el.syncNowBtn.textContent = "同步中...";
-  try { await window.vibeApp.adminApi("POST", "/api/admin/todo-sync/run"); } catch {}
-  el.syncNowBtn.textContent = "立即同步"; el.syncNowBtn.disabled = false;
-  loadSyncStatus();
+  try {
+    const result = await adminApi("POST", "/api/admin/todo-sync/run");
+    const message = result.changed ? "同步完成，已有更新" : "同步完成，无变化";
+    await loadSyncStatus();
+    el.syncStatus.innerHTML = `${esc(message)} · ${el.syncStatus.innerHTML}`;
+  } catch (error) {
+    el.syncStatus.textContent = error.message;
+    await loadSyncStatus();
+    el.syncStatus.innerHTML = `${esc(error.message)} · ${el.syncStatus.innerHTML}`;
+  } finally {
+    el.syncNowBtn.textContent = "立即同步"; el.syncNowBtn.disabled = false;
+  }
 });
 
 // ─── Display config (native) ───
 async function loadDisplayConfig() {
   try {
-    const res = await window.vibeApp.adminApi("GET", "/api/admin/display-config");
+    const res = await adminApi("GET", "/api/admin/display-config");
     if (res.ok) { el.cfgTodoRefresh.value = res.values?.todoRefreshMs ?? 2000; el.cfgCodingRefresh.value = res.values?.codingRefreshMs ?? 2000; el.cfgStyle.value = res.values?.style || "light"; }
-  } catch {}
+  } catch (error) {
+    setInlineStatus(el.displayStatus, error.message, true);
+  }
 }
 
 el.saveDisplayBtn?.addEventListener("click", async () => {
   el.saveDisplayBtn.disabled = true;
   try {
-    await window.vibeApp.adminApi("POST", "/api/admin/display-config", {
+    const result = await adminApi("POST", "/api/admin/display-config", {
       todoRefreshMs: Number(el.cfgTodoRefresh.value), codingRefreshMs: Number(el.cfgCodingRefresh.value), style: el.cfgStyle.value,
     });
-  } catch {}
+    const message = result.restartRequired
+      ? "显示配置已保存；需重启服务后生效"
+      : "显示配置已保存并已立即生效，设备会在下一次刷新周期更新";
+    setInlineStatus(el.displayStatus, result.error ? `${message}；${result.error}` : message, Boolean(result.error));
+    await loadDisplayConfig();
+  } catch (error) {
+    setInlineStatus(el.displayStatus, error.message, true);
+  }
   el.saveDisplayBtn.disabled = false;
 });
 
@@ -275,15 +402,30 @@ function fill(f, dsp) {
 // ─── Events ───
 el.sttProvider.addEventListener("change", updateVis);
 el.sendTarget.addEventListener("change", updateVis);
-el.form.addEventListener("submit", async (e) => { e.preventDefault(); el.saveBtn.disabled = true; try { const b = await window.vibeApp.saveConfig(collect()); app.bootstrap = b; app.service = b.service; fill(b.form, b.desktopSettingsPath); renderService(); connectWs(); } finally { el.saveBtn.disabled = false; } });
-el.startBtn.addEventListener("click", async () => { const b = await window.vibeApp.startService(); app.bootstrap = b; app.service = b.service; renderService(); connectWs(); });
-el.restartBtn.addEventListener("click", async () => { const b = await window.vibeApp.restartService(); app.bootstrap = b; app.service = b.service; renderService(); connectWs(); });
-el.stopBtn.addEventListener("click", async () => { const b = await window.vibeApp.stopService(); app.bootstrap = b; app.service = b.service; renderService(); connectWs(); });
+el.form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  el.saveBtn.disabled = true;
+  setInlineStatus(el.settingsStatus, "正在保存并应用...");
+  try {
+    const b = await window.vibeApp.saveConfig(collect());
+    app.bootstrap = b; app.service = b.service;
+    fill(b.form, b.desktopSettingsPath); renderService(); connectWs();
+    const needsSetup = b.service?.status === "needs_setup";
+    setInlineStatus(el.settingsStatus, needsSetup ? `已保存；仍需配置：${b.service?.message || ""}` : "已保存并应用；后台服务通常会在几秒内重启完成", needsSetup);
+  } catch (error) {
+    setInlineStatus(el.settingsStatus, error.message || String(error), true);
+  } finally {
+    el.saveBtn.disabled = false;
+  }
+});
+el.startBtn.addEventListener("click", async () => { const b = await window.vibeApp.startService(); app.bootstrap = b; app.service = b.service; renderService(); connectWs(); el.serviceMessage.textContent = b.service?.message || "服务启动中"; });
+el.restartBtn.addEventListener("click", async () => { const b = await window.vibeApp.restartService(); app.bootstrap = b; app.service = b.service; renderService(); connectWs(); el.serviceMessage.textContent = "服务重启中，设备可能需要几秒重新连接"; });
+el.stopBtn.addEventListener("click", async () => { const b = await window.vibeApp.stopService(); app.bootstrap = b; app.service = b.service; renderService(); connectWs(); el.serviceMessage.textContent = "服务已停止"; });
 el.configBtn.addEventListener("click", async () => { const b = await window.vibeApp.openConfigFolder(); app.bootstrap = b; app.service = b.service; renderService(); });
 el.pickCodexBtn.addEventListener("click", async () => { const v = await window.vibeApp.pickDirectory(el.codexCwd.value); if (v) el.codexCwd.value = v; });
 el.pickClaudeBtn.addEventListener("click", async () => { const v = await window.vibeApp.pickDirectory(el.claudeCwd.value); if (v) el.claudeCwd.value = v; });
 el.refreshBtn?.addEventListener("click", () => refreshDevices());
-el.discoverBtn?.addEventListener("click", async () => { el.discoverBtn.disabled = true; el.discoverBtn.textContent = "发送中..."; try { await window.vibeApp.adminApi("POST", "/api/admin/discover"); setTimeout(() => refreshDevices(), 3000); } catch {} el.discoverBtn.textContent = "重新发现"; el.discoverBtn.disabled = false; });
+el.discoverBtn?.addEventListener("click", async () => { el.discoverBtn.disabled = true; el.discoverBtn.textContent = "发送中..."; try { await adminApi("POST", "/api/admin/discover"); el.serviceMessage.textContent = "已发送发现请求，等待设备重新连接"; setTimeout(() => refreshDevices(), 3000); } catch (error) { el.serviceMessage.textContent = error.message; } el.discoverBtn.textContent = "重新发现"; el.discoverBtn.disabled = false; });
 el.logFilterCli?.addEventListener("change", renderLive);
 el.logFilterSvc?.addEventListener("change", renderService);
 window.vibeApp.onState((p) => { app.service = p.service; renderService(); connectWs(); });
