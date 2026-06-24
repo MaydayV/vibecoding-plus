@@ -31,7 +31,10 @@
     "console": "node client/server/scripts/console.mjs",
     "vibe": "node client/server/scripts/vibe.mjs",
     "desktop:dev": "electron .",
-    "desktop:dist:mac": "electron-builder --mac dmg zip"
+    "desktop:dist:mac": "electron-builder --mac dmg zip",
+    "native:generate": "cd client/macos-native && if command -v xcodegen >/dev/null 2>&1; then xcodegen generate; else echo 'xcodegen not found; using checked-in Xcode project'; fi",
+    "native:build": "npm run native:generate && cd client/macos-native && xcodebuild -project VibeCodingPlusNative.xcodeproj -scheme VibeCodingPlusNative -configuration Debug -destination 'platform=macOS' build",
+    "native:open": "open client/macos-native/VibeCodingPlusNative.xcodeproj"
   },
   "engines": {
     "node": ">=20"
