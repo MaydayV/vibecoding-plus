@@ -456,6 +456,10 @@ void CustomLcdDisplay::refresh_task_loop() {
     const size_t kTinyMaxAccumBits = 64 * 8;
     const TickType_t kTinyMaxHoldTicks = pdMS_TO_TICKS(1200);
     const TickType_t kStatPeriodTicks = pdMS_TO_TICKS(3000);
+    // Force a full refresh every 5 minutes to clear e-paper ghosting,
+    // even when the display content has not changed.
+    const TickType_t kPeriodicFullRefreshTicks = pdMS_TO_TICKS(5UL * 60 * 1000);
+    TickType_t last_full_refresh_tick = 0;
 
     auto maybe_log_stats = [&](TickType_t now_tick) {
         if (last_stat_tick == 0) {
@@ -545,8 +549,11 @@ void CustomLcdDisplay::refresh_task_loop() {
         // 统一差异分析：仅统计差异比例
         FrameDiffResult result = analyze_frame_diff(prev_buffer, tx_buf, Width, Height);
 
-        // 快速退出：没有任何变化
-        if (result.diff_bits == 0 && !force_full) {
+        // 快速退出：没有任何变化 — 除非到了定时全量刷新时间
+        const bool periodic_full_due = (last_full_refresh_tick == 0)
+            ? true
+            : ((now - last_full_refresh_tick) >= kPeriodicFullRefreshTicks);
+        if (result.diff_bits == 0 && !force_full && !periodic_full_due) {
             tiny_diff_streak = 0;
             tiny_diff_accum_bits = 0;
             tiny_diff_first_tick = 0;
@@ -564,6 +571,12 @@ void CustomLcdDisplay::refresh_task_loop() {
             }
             vTaskDelay(1);
             continue;
+        }
+        // Periodic full refresh: no content diff but time to clear ghosting.
+        // Rewrite the screen from the existing buffer with a full refresh.
+        if (result.diff_bits == 0 && periodic_full_due) {
+            force_full = true;
+            memcpy(tx_buf, prev_buffer, lcd_spi_data.buffer_len);
         }
 
         // 可选：过滤超小差异（防止抗锯齿/边界振荡导致的无意义刷新）
@@ -631,6 +644,7 @@ void CustomLcdDisplay::refresh_task_loop() {
             memcpy(prev_buffer, tx_buf, lcd_spi_data.buffer_len);
             prev_buffer_synced = true;
             partial_since_full = 0;
+            last_full_refresh_tick = xTaskGetTickCount();
         } else
         {
             stat_partial++;
