@@ -2,7 +2,10 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+import { applyToolPath, buildToolPath } from "./environment-checks.mjs";
 import { getUserConfigPath, projectRoot } from "./paths.mjs";
+
+applyToolPath();
 
 const INITIAL_ENV_KEYS = new Set(Object.keys(process.env));
 let appliedConfigKeys = new Set();
@@ -42,6 +45,7 @@ function applyEnvValues(values) {
     }
     process.env[key] = value;
   }
+  applyToolPath();
 }
 
 function uniqPaths(paths) {
@@ -216,7 +220,10 @@ export function isCliAvailable(command) {
 
   try {
     const finder = process.platform === "win32" ? "where" : "which";
-    execSync(`${finder} ${command}`, { stdio: "ignore" });
+    execSync(`${finder} ${command}`, {
+      stdio: "ignore",
+      env: { ...process.env, PATH: buildToolPath(process.env.PATH) }
+    });
     return true;
   } catch {
     return false;

@@ -77,7 +77,12 @@
       "category": "public.app-category.developer-tools",
       "artifactName": "${productName}-${version}-${arch}.${ext}",
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "VibeCoding Plus uses the microphone for local push-to-talk voice input.",
+        "NSAppleEventsUsageDescription": "VibeCoding Plus uses Apple Events to inject transcribed text into the active application when Inject mode is enabled.",
+        "NSRemindersUsageDescription": "VibeCoding Plus can read and update Reminders when Apple Reminders sync is enabled."
+      }
     },
     "dmg": {
       "contents": [

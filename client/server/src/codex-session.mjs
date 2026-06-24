@@ -1,10 +1,24 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
-function buildCodexArgs(config, threadId, prompt) {
-  const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", config.codexCommand];
+function buildCodexInvocation(config, threadId, prompt) {
+  const codexCommand = config.codexCommand || "codex";
 
-  args.push("-C", config.codexCwd);
+  if (process.platform === "win32" && codexCommand.endsWith(".ps1")) {
+    const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", codexCommand];
+    args.push("-C", config.codexCwd);
+    if (threadId) {
+      args.push("exec", "resume", threadId, "--json", prompt);
+    } else {
+      args.push("exec", "--json", prompt);
+    }
+    if (config.codexSkipGitRepoCheck) {
+      args.push("--skip-git-repo-check");
+    }
+    return { command: "powershell.exe", args };
+  }
+
+  const args = ["-C", config.codexCwd];
 
   if (threadId) {
     args.push("exec", "resume", threadId, "--json", prompt);
@@ -16,7 +30,11 @@ function buildCodexArgs(config, threadId, prompt) {
     args.push("--skip-git-repo-check");
   }
 
-  return args;
+  if (process.platform === "win32") {
+    return { command: "cmd.exe", args: ["/c", codexCommand, ...args] };
+  }
+
+  return { command: codexCommand, args };
 }
 
 export class CodexSessionManager {
@@ -50,8 +68,8 @@ export class CodexSessionManager {
       threadId: this.threadId
     });
 
-    const args = buildCodexArgs(this.config, this.threadId, trimmedPrompt);
-    const child = spawn("powershell.exe", args, {
+    const { command, args } = buildCodexInvocation(this.config, this.threadId, trimmedPrompt);
+    const child = spawn(command, args, {
       cwd: this.config.codexCwd,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true

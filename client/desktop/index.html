@@ -18,6 +18,7 @@
           <li class="nav-item" data-nav="todo"><span class="nav-icon">☑</span><span>待办</span></li>
           <li class="nav-item" data-nav="reminders"><span class="nav-icon">🔔</span><span>提醒同步</span></li>
           <li class="nav-item" data-nav="display"><span class="nav-icon">◧</span><span>显示</span></li>
+          <li class="nav-item" data-nav="environment"><span class="nav-icon">⌘</span><span>环境</span></li>
           <li class="nav-item" data-nav="settings"><span class="nav-icon">⚙</span><span>设置</span></li>
           <li class="nav-item" data-nav="logs"><span class="nav-icon">▤</span><span>日志</span></li>
         </ul>
@@ -102,6 +103,17 @@
             </label>
             <div style="margin-top:12px"><button id="save-display-btn" class="btn btn-primary">保存显示配置</button></div>
           </div>
+        </section>
+
+        <!-- Environment -->
+        <section class="page" data-page="environment">
+          <header class="page-header">
+            <h1>环境检测</h1>
+            <div class="page-actions"><button id="install-missing-btn" class="btn btn-sm btn-primary">安装缺失项</button><button id="refresh-env-checks-btn" class="btn btn-sm">重新检测</button></div>
+          </header>
+          <div id="environment-status" class="operation-status hidden"></div>
+          <div id="environment-list" class="environment-list"><div class="empty-state">加载中...</div></div>
+          <pre id="install-log" class="install-log hidden"></pre>
         </section>
 
         <!-- Settings -->

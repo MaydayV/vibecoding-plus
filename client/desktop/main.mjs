@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { fork } from "node:child_process";
+import { fork, spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -10,6 +10,7 @@ import { WebSocket } from "ws";
 import { buildDesktopFormState, buildUserConfigUpdates } from "../server/src/desktop-config.mjs";
 import { getConfigIssues, loadConfig, writeUserConfigValues } from "../server/src/config.mjs";
 import { getDesktopSettingsPath, loadDesktopSettings, writeDesktopSettings } from "../server/src/desktop-settings.mjs";
+import { applyToolPath, buildToolPath, getEnvironmentChecks, getInstallScript, INSTALL_TOOL_IDS } from "../server/src/environment-checks.mjs";
 import { getUserConfigDir } from "../server/src/paths.mjs";
 
 const APP_ID = "com.mac20777.vibecodingplus";
@@ -21,6 +22,7 @@ const DEFAULT_INVOKE_CWD = os.homedir();
 if (!process.env.VIBE_INVOKE_CWD) {
   process.env.VIBE_INVOKE_CWD = DEFAULT_INVOKE_CWD;
 }
+applyToolPath();
 
 app.setAppUserModelId(APP_ID);
 writeDesktopLog("app boot", {
@@ -41,6 +43,7 @@ let bridgeStopRequested = false;
 let isQuitting = false;
 let initialLaunchHidden = false;
 let bundledIconCache = null;
+let installerRunning = false;
 const desktopLogPath = path.join(getUserConfigDir(), "desktop.log");
 
 function writeDesktopLog(message, details = null) {
@@ -71,6 +74,13 @@ function wait(ms) {
 
 function loadEffectiveConfig() {
   return loadConfig({ quietMissing: true, desktopMode: true });
+}
+
+async function buildEnvironmentReport() {
+  const config = loadEffectiveConfig();
+  return await getEnvironmentChecks(config, {
+    configIssues: getConfigIssues(config)
+  });
 }
 
 function snapshotServiceState() {
@@ -267,6 +277,100 @@ function maybeHideToTray(event) {
 
 function bridgeEntryPath() {
   return path.join(app.getAppPath(), "client", "server", "src", "server.mjs");
+}
+
+function createInstallEnv() {
+  return {
+    ...process.env,
+    PATH: buildToolPath(process.env.PATH),
+    VIBE_INVOKE_CWD: process.env.VIBE_INVOKE_CWD || DEFAULT_INVOKE_CWD
+  };
+}
+
+async function runInstallScript(toolId) {
+  if (installerRunning) {
+    return { ok: false, error: "已有安装任务正在执行，请稍后再试。", log: "" };
+  }
+  if (!INSTALL_TOOL_IDS.has(toolId)) {
+    return { ok: false, error: "不支持的安装项。", log: "" };
+  }
+
+  const script = getInstallScript(toolId);
+  if (!script) {
+    return { ok: false, error: "没有可用安装脚本。", log: "" };
+  }
+
+  installerRunning = true;
+  writeDesktopLog("install start", { toolId });
+
+  const child = spawn("/bin/bash", ["-lc", script], {
+    cwd: os.homedir(),
+    env: createInstallEnv(),
+    windowsHide: true
+  });
+
+  let logText = "";
+  const appendLog = (chunk) => {
+    const text = String(chunk || "");
+    logText += text;
+    for (const line of text.split(/\r?\n/u)) {
+      if (line.trim()) {
+        writeDesktopLog(`install:${toolId}`, line);
+      }
+    }
+  };
+
+  child.stdout?.on("data", appendLog);
+  child.stderr?.on("data", appendLog);
+
+  const code = await new Promise((resolve) => {
+    child.on("error", (error) => {
+      appendLog(`${error.message}\n`);
+      resolve(1);
+    });
+    child.on("exit", (exitCode) => resolve(exitCode ?? 1));
+  });
+
+  installerRunning = false;
+  applyToolPath();
+  const report = await buildEnvironmentReport();
+  const ok = code === 0;
+  writeDesktopLog("install exit", { toolId, code });
+  return {
+    ok,
+    code,
+    log: logText.trim(),
+    error: ok ? "" : `安装命令退出码 ${code}`,
+    report
+  };
+}
+
+function openToolInTerminal(toolId) {
+  const commands = {
+    codex: "codex",
+    claude: "claude",
+    remindctl: "remindctl status",
+    whisper_cpp: "whisper-cli --help"
+  };
+  const command = commands[toolId];
+  if (!command) {
+    return false;
+  }
+
+  const scriptPath = path.join(os.tmpdir(), `vibecoding-${toolId}-${Date.now()}.command`);
+  const content = [
+    "#!/bin/zsh",
+    `export PATH="${buildToolPath(process.env.PATH).replace(/"/g, '\\"')}"`,
+    "cd \"$HOME\"",
+    command,
+    "echo",
+    "echo '完成后可关闭此窗口。'",
+    "read -k 1 '?按任意键关闭...'"
+  ].join("\n");
+  fs.writeFileSync(scriptPath, content, "utf8");
+  fs.chmodSync(scriptPath, 0o755);
+  shell.openPath(scriptPath);
+  return true;
 }
 
 function createLineReader(stream, source) {
@@ -832,6 +936,49 @@ ipcMain.handle("desktop:get-service-status", async () => {
     return await res.json();
   } catch {
     return { ok: false };
+  }
+});
+
+ipcMain.handle("desktop:get-environment-checks", async () => {
+  try {
+    return await buildEnvironmentReport();
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      checks: []
+    };
+  }
+});
+
+ipcMain.handle("desktop:install-tool", async (_event, toolId) => {
+  try {
+    return await runInstallScript(String(toolId || "").trim());
+  } catch (error) {
+    installerRunning = false;
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      log: ""
+    };
+  }
+});
+
+ipcMain.handle("desktop:open-macos-permissions", async () => {
+  try {
+    await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("desktop:open-tool-login", async (_event, toolId) => {
+  try {
+    const ok = openToolInTerminal(String(toolId || "").trim());
+    return { ok };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 });
 

@@ -75,12 +75,18 @@ const el = {
   cfgStyle: document.querySelector("#cfg-style"),
   saveDisplayBtn: document.querySelector("#save-display-btn"),
   displayStatus: document.querySelector("#display-status"),
+  envList: document.querySelector("#environment-list"),
+  envStatus: document.querySelector("#environment-status"),
+  envRefreshBtn: document.querySelector("#refresh-env-checks-btn"),
+  installMissingBtn: document.querySelector("#install-missing-btn"),
+  installLog: document.querySelector("#install-log"),
   settingsStatus: document.querySelector("#settings-status"),
 };
 
 const live = { transcript: "", userText: "", assistantText: "", cliStatus: "尚未连接", cliLogLines: [] };
 const app = { bootstrap: null, service: null, socket: null, rt: null, sp: null };
 let deviceTimer = null;
+let environmentReport = null;
 
 // ─── Helpers ───
 const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -127,6 +133,137 @@ function renderTodoItem(item, { archived = false } = {}) {
   return `<div class="todo-item ${item.completed ? "completed" : ""}" data-id="${escAttr(item.id)}">${primary}<span class="todo-text">${esc(item.title)}</span>${source}${due}<button class="todo-del" title="删除" data-action="delete" data-id="${escAttr(item.id)}">×</button></div>`;
 }
 
+function envStatusLabel(status) {
+  if (status === "ok") return "正常";
+  if (status === "missing") return "缺失";
+  if (status === "optional") return "可选";
+  return "提示";
+}
+
+function envActionButtons(item) {
+  const buttons = [];
+  if (item.installable) {
+    buttons.push(`<button class="btn btn-sm btn-primary env-install" data-tool="${escAttr(item.id)}">${esc(item.installLabel || "安装")}</button>`);
+  }
+  if ((item.id === "codex" || item.id === "claude") && item.status === "ok") {
+    buttons.push(`<button class="btn btn-sm env-login" data-tool="${escAttr(item.id)}">登录/检查</button>`);
+  }
+  if (item.id === "macos_permissions") {
+    buttons.push('<button class="btn btn-sm env-permissions">打开权限设置</button>');
+  }
+  return buttons.join("");
+}
+
+function renderEnvironment(report) {
+  environmentReport = report;
+  const checks = report?.checks || [];
+  if (!checks.length) {
+    el.envList.innerHTML = '<div class="empty-state">暂无环境检测结果</div>';
+    return;
+  }
+
+  el.envList.innerHTML = checks.map((item) => {
+    const detail = item.path || item.version || item.note || "";
+    return `<div class="env-item env-${escAttr(item.status)}">
+      <div class="env-main">
+        <span class="env-name">${esc(item.label)}</span>
+        <span class="env-purpose">${esc(item.purpose || "")}</span>
+        ${detail ? `<code class="env-detail">${esc(detail)}</code>` : ""}
+        ${item.note ? `<span class="env-note">${esc(item.note)}</span>` : ""}
+      </div>
+      <div class="env-actions">
+        <span class="env-badge">${envStatusLabel(item.status)}</span>
+        ${envActionButtons(item)}
+      </div>
+    </div>`;
+  }).join("");
+
+  el.envList.querySelectorAll(".env-install").forEach((btn) => {
+    btn.addEventListener("click", () => installTool(btn.dataset.tool));
+  });
+  el.envList.querySelectorAll(".env-login").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const result = await window.vibeApp.openToolLogin(btn.dataset.tool);
+      setInlineStatus(el.envStatus, result.ok ? "已打开终端，请按提示完成登录或检查。" : (result.error || "打开终端失败"), !result.ok);
+    });
+  });
+  el.envList.querySelectorAll(".env-permissions").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const result = await window.vibeApp.openMacosPermissions();
+      setInlineStatus(el.envStatus, result.ok ? "已打开系统设置。请允许 VibeCoding Plus 控制辅助功能/自动化。" : (result.error || "打开系统设置失败"), !result.ok);
+    });
+  });
+
+  const missing = checks.filter((item) => item.status === "missing");
+  setInlineStatus(
+    el.envStatus,
+    missing.length ? `发现 ${missing.length} 个缺失项，安装后请重新检测。` : "环境检测通过；可直接启动服务。",
+    missing.length > 0
+  );
+}
+
+async function loadEnvironmentChecks() {
+  el.envRefreshBtn.disabled = true;
+  try {
+    const report = await window.vibeApp.getEnvironmentChecks();
+    if (report.error) {
+      setInlineStatus(el.envStatus, report.error, true);
+    }
+    renderEnvironment(report);
+  } catch (error) {
+    setInlineStatus(el.envStatus, error.message || String(error), true);
+  } finally {
+    el.envRefreshBtn.disabled = false;
+  }
+}
+
+async function installTool(toolId) {
+  const item = (environmentReport?.checks || []).find((entry) => entry.id === toolId);
+  const label = item?.label || toolId;
+  const needsBrew = ["remindctl", "whisper_cpp"].includes(toolId);
+  const brewMissing = !(environmentReport?.checks || []).some((entry) => entry.id === "brew" && entry.status === "ok");
+  const message = needsBrew && brewMissing
+    ? `将先安装 Homebrew，再安装 ${label}。过程中可能需要系统密码或较长时间，确认继续？`
+    : `确认安装 ${label}？过程中会联网下载官方安装脚本或 Homebrew 包。`;
+  if (!confirm(message)) return;
+
+  el.installLog.classList.remove("hidden");
+  el.installLog.textContent = `开始安装 ${label}...\n`;
+  setInlineStatus(el.envStatus, `正在安装 ${label}...`);
+  document.querySelectorAll(".env-install").forEach((btn) => { btn.disabled = true; });
+  el.installMissingBtn.disabled = true;
+  try {
+    const result = await window.vibeApp.installTool(toolId);
+    el.installLog.textContent = result.log || result.error || "安装命令没有输出。";
+    if (result.report) {
+      renderEnvironment(result.report);
+    } else {
+      await loadEnvironmentChecks();
+    }
+    setInlineStatus(el.envStatus, result.ok ? `${label} 安装完成。` : `${label} 安装失败：${result.error || "请查看日志"}`, !result.ok);
+  } catch (error) {
+    setInlineStatus(el.envStatus, error.message || String(error), true);
+  } finally {
+    document.querySelectorAll(".env-install").forEach((btn) => { btn.disabled = false; });
+    el.installMissingBtn.disabled = false;
+  }
+}
+
+async function installMissingTools() {
+  const missing = (environmentReport?.checks || []).filter((item) => item.status === "missing" && item.installable);
+  if (!missing.length) {
+    setInlineStatus(el.envStatus, "没有需要安装的缺失项。");
+    return;
+  }
+  for (const item of missing) {
+    await installTool(item.id);
+    const stillMissing = (environmentReport?.checks || []).some((entry) => entry.id === item.id && entry.status === "missing");
+    if (stillMissing) {
+      break;
+    }
+  }
+}
+
 // ─── Navigation ───
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => {
@@ -138,6 +275,7 @@ document.querySelectorAll(".nav-item").forEach((item) => {
     if (t === "todo") loadTodos();
     if (t === "reminders") loadSyncStatus();
     if (t === "display") loadDisplayConfig();
+    if (t === "environment") loadEnvironmentChecks();
   });
 });
 
@@ -425,6 +563,8 @@ el.configBtn.addEventListener("click", async () => { const b = await window.vibe
 el.pickCodexBtn.addEventListener("click", async () => { const v = await window.vibeApp.pickDirectory(el.codexCwd.value); if (v) el.codexCwd.value = v; });
 el.pickClaudeBtn.addEventListener("click", async () => { const v = await window.vibeApp.pickDirectory(el.claudeCwd.value); if (v) el.claudeCwd.value = v; });
 el.refreshBtn?.addEventListener("click", () => refreshDevices());
+el.envRefreshBtn?.addEventListener("click", () => loadEnvironmentChecks());
+el.installMissingBtn?.addEventListener("click", () => installMissingTools());
 el.discoverBtn?.addEventListener("click", async () => { el.discoverBtn.disabled = true; el.discoverBtn.textContent = "发送中..."; try { await adminApi("POST", "/api/admin/discover"); el.serviceMessage.textContent = "已发送发现请求，等待设备重新连接"; setTimeout(() => refreshDevices(), 3000); } catch (error) { el.serviceMessage.textContent = error.message; } el.discoverBtn.textContent = "重新发现"; el.discoverBtn.disabled = false; });
 el.logFilterCli?.addEventListener("change", renderLive);
 el.logFilterSvc?.addEventListener("change", renderService);
@@ -435,5 +575,5 @@ window.vibeApp.onState((p) => { app.service = p.service; renderService(); connec
   const b = await window.vibeApp.getBootstrap();
   app.bootstrap = b; app.service = b.service;
   fill(b.form, b.desktopSettingsPath);
-  renderService(); renderLive(); connectWs();
+  renderService(); renderLive(); connectWs(); loadEnvironmentChecks();
 })();

@@ -1,5 +1,5 @@
 import { createServer } from "node:net";
-import { isCliAvailable } from "./config.mjs";
+import { getEnvironmentChecks } from "./environment-checks.mjs";
 
 function ok(label) {
   console.log(`  \x1b[32m[✓]\x1b[0m ${label}`);
@@ -112,24 +112,22 @@ export async function runDoctor(config) {
     warn(`Todo intent: ${todoIntent.label}`);
   }
 
-  // Claude Code CLI
-  const claudeFound = isCliAvailable(config.claudeCommand);
-  if (claudeFound) {
-    ok(`claude found: ${config.claudeCommand}`);
-  } else {
-    warn(`claude not found (${config.claudeCommand}) — install with: npm install -g @anthropic-ai/claude-code`);
+  const environment = await getEnvironmentChecks(config, { configIssues: [] });
+  const missingRequiredTools = environment.checks.filter((item) => item.type === "tool" && item.required && item.status === "missing");
+
+  for (const item of environment.checks.filter((entry) => entry.type === "tool")) {
+    if (item.status === "ok") {
+      ok(`${item.label}: ${item.path}${item.version ? ` (${item.version})` : ""}`);
+    } else if (item.required) {
+      fail(`${item.label}: not found — ${item.note || item.purpose}`);
+      hasError = true;
+    } else {
+      warn(`${item.label}: not found — ${item.note || item.purpose}`);
+    }
   }
 
-  // Codex CLI
-  const codexFound = isCliAvailable(config.codexCommand);
-  if (codexFound) {
-    ok(`codex found: ${config.codexCommand}`);
-  } else {
-    warn(`codex not found (${config.codexCommand}) — install with: npm install -g @openai/codex`);
-  }
-
-  if (!claudeFound && !codexFound) {
-    warn("neither claude nor codex found — SEND_TARGET will fall back to text_injector");
+  if (missingRequiredTools.length > 0) {
+    warn(`missing required desktop tools: ${missingRequiredTools.map((item) => item.id).join(", ")}`);
   }
 
   // Ports
