@@ -266,7 +266,7 @@ function maybeHideToTray(event) {
 }
 
 function bridgeEntryPath() {
-  return path.join(app.getAppPath(), "src", "server.mjs");
+  return path.join(app.getAppPath(), "client", "server", "src", "server.mjs");
 }
 
 function createLineReader(stream, source) {
