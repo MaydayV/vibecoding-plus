@@ -22,16 +22,25 @@ final class BridgeService: ObservableObject {
             snapshot.message = "找不到 client/server/src/server.mjs"
             return
         }
+        guard let nodeURL = locateNodeExecutable() else {
+            snapshot.status = .error
+            snapshot.message = "找不到内置 Node 运行时，也没有可用的系统 node"
+            return
+        }
 
         let proc = Process()
         let stdout = Pipe()
         let stderr = Pipe()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        proc.arguments = ["node", serverURL.path]
-        proc.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        proc.executableURL = nodeURL
+        proc.arguments = [serverURL.path]
+        proc.currentDirectoryURL = serverURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
         proc.environment = Shell.environment(extra: [
             "VIBE_DESKTOP": "1",
-            "VIBE_INVOKE_CWD": NSHomeDirectory()
+            "VIBE_INVOKE_CWD": NSHomeDirectory(),
+            "VIBECODING_NATIVE_RUNTIME": runtimeRoot()?.path ?? ""
         ])
         proc.standardOutput = stdout
         proc.standardError = stderr
@@ -151,8 +160,11 @@ final class BridgeService: ObservableObject {
         }
         candidates.append(URL(fileURLWithPath: fm.currentDirectoryPath))
         candidates.append(URL(fileURLWithPath: "/Users/colin/Dev/vibecoding-plus"))
-        if let resourceURL = Bundle.main.resourceURL {
-            candidates.append(resourceURL)
+        if let runtime = runtimeRoot() {
+            let server = runtime.appendingPathComponent("client/server/src/server.mjs")
+            if fm.fileExists(atPath: server.path) {
+                return server
+            }
         }
 
         for root in candidates {
@@ -162,5 +174,23 @@ final class BridgeService: ObservableObject {
             }
         }
         return nil
+    }
+
+    private func locateNodeExecutable() -> URL? {
+        let fm = FileManager.default
+        if let runtime = runtimeRoot() {
+            let bundled = runtime.appendingPathComponent("node/bin/node")
+            if fm.isExecutableFile(atPath: bundled.path) {
+                return bundled
+            }
+        }
+        let systemNode = Shell.findExecutable("node")
+        return systemNode.isEmpty ? nil : URL(fileURLWithPath: systemNode)
+    }
+
+    private func runtimeRoot() -> URL? {
+        guard let resourceURL = Bundle.main.resourceURL else { return nil }
+        let runtime = resourceURL.appendingPathComponent("runtime", isDirectory: true)
+        return FileManager.default.fileExists(atPath: runtime.path) ? runtime : nil
     }
 }

@@ -10,6 +10,7 @@ tmp/
 npm-debug.log*
 .npm-cache/
 dist-desktop/
+dist-native/
 logs/
 .playwright-mcp/
 .codex/

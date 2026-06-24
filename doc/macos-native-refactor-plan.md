@@ -46,6 +46,8 @@
 
 原因：当前 Node 服务包含大量业务逻辑和硬件/WebSocket 协议，直接全量重写会同时影响 ESP32 设备、语音、Codex/Claude、提醒同步和 todo。先替换客户端壳层可以快速获得原生体验，同时保留可运行功能。
 
+当前实现要求：原生 `.app` 必须自带 Node runtime、`client/server` 服务代码和 `ws` 依赖。用户安装 App 后不需要手动安装 Node，也不需要保留开发仓库目录。
+
 ### 阶段 2：把系统能力迁到 Swift/AppKit
 
 优先迁移这些模块：
@@ -96,11 +98,29 @@ flowchart TD
 ## 第一版验收范围
 
 - 能编译出 SwiftUI macOS App。
-- 能从原生客户端启动/停止/重启本地服务。
+- 能从原生客户端启动/停止/重启 App 包内本地服务。
+- App 包内包含官方 Node.js macOS runtime、`client/server` 和 `node_modules/ws`。
 - 能显示服务状态、服务日志、设备列表、待办列表。
 - 能执行环境检测和逐项安装。
 - 能打开配置目录、权限设置、CLI 登录终端。
 - 能保存核心配置项：发送目标、STT provider、工作目录、LAN secret、桌面选项。
+
+## 打包产物
+
+- `npm run native:dist:mac`：生成自包含原生 `.app` 和 zip。
+- `dist-native/VibeCoding Plus.app`：可直接拖入 `/Applications` 使用。
+- `dist-native/VibeCoding Plus-native-Release-<arch>.zip`：分发压缩包。
+
+App 内 runtime 结构：
+
+```text
+VibeCoding Plus.app/
+└── Contents/Resources/runtime/
+    ├── node/bin/node
+    ├── client/server/
+    ├── node_modules/ws/
+    └── package.json
+```
 
 ## 后续删除 Electron 的条件
 
