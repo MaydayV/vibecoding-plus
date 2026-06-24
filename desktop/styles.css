@@ -688,3 +688,24 @@ select:focus {
   display: flex;
   gap: 6px;
 }
+
+/* Log filter */
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.log-header h3 {
+  margin: 0;
+}
+
+.log-filter {
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--muted);
+}

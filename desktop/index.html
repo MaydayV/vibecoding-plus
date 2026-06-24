@@ -405,11 +405,26 @@
 
           <div class="log-columns">
             <div>
-              <h3>CLI 事件</h3>
+              <div class="log-header">
+                <h3>CLI 事件</h3>
+                <select id="log-filter-cli" class="log-filter">
+                  <option value="all">全部</option>
+                  <option value="transcript">转写</option>
+                  <option value="user">用户指令</option>
+                  <option value="assistant">AI 回复</option>
+                </select>
+              </div>
               <pre id="cli-log-tail" class="log-box">尚未连接。</pre>
             </div>
             <div>
-              <h3>服务日志</h3>
+              <div class="log-header">
+                <h3>服务日志</h3>
+                <select id="log-filter-service" class="log-filter">
+                  <option value="all">全部</option>
+                  <option value="device">设备事件</option>
+                  <option value="bridge">服务进程</option>
+                </select>
+              </div>
               <pre id="service-log-tail" class="log-box">等待启动。</pre>
             </div>
           </div>

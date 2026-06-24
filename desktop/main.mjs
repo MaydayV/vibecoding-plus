@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, shell, Tray } from "electron";
 import { WebSocket } from "ws";
 
 import { buildDesktopFormState, buildUserConfigUpdates } from "../src/desktop-config.mjs";
@@ -851,6 +851,20 @@ ipcMain.handle("desktop:admin-api", async (_event, method, apiPath, body) => {
   }
 });
 
+ipcMain.handle("desktop:notify", async (_event, { title, body } = {}) => {
+  if (!Notification.isSupported()) return;
+  try {
+    const notification = new Notification({
+      title: title || "VibeCoding Plus",
+      body: body || "",
+      icon: createWindowIcon()
+    });
+    notification.show();
+  } catch (error) {
+    writeDesktopLog("notification failed", error?.message || String(error));
+  }
+});
+
 ipcMain.handle("desktop:save-config", async (_event, payload = {}) => {
   writeUserConfigValues(buildUserConfigUpdates(payload.form || {}));
   const { settings } = writeDesktopSettings(payload.desktopSettings || {});
@@ -901,6 +915,7 @@ app.on("activate", () => {
 app.on("before-quit", () => {
   writeDesktopLog("app before-quit");
   isQuitting = true;
+  globalShortcut.unregisterAll();
   mainWindow?.removeAllListeners("close");
   bridgeChild?.kill();
 });
@@ -928,3 +943,18 @@ await syncAutoLaunch();
 createMainWindow();
 createTray();
 void startBridgeProcess({ revealOnError: !initialLaunchHidden });
+
+// Global shortcut: Cmd+Shift+V to toggle bridge service
+try {
+  const registered = globalShortcut.register("CommandOrControl+Shift+V", () => {
+    writeDesktopLog("global shortcut triggered");
+    if (bridgeChild) {
+      void restartBridgeProcess();
+    } else {
+      void startBridgeProcess();
+    }
+  });
+  writeDesktopLog("globalShortcut registered", { registered });
+} catch (error) {
+  writeDesktopLog("globalShortcut registration failed", error?.message || String(error));
+}

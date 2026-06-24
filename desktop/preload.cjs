@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("vibeApp", {
   getDevices: () => ipcRenderer.invoke("desktop:get-devices"),
   getServiceStatus: () => ipcRenderer.invoke("desktop:get-service-status"),
   adminApi: (method, path, body) => ipcRenderer.invoke("desktop:admin-api", method, path, body),
+  notify: (opts) => ipcRenderer.invoke("desktop:notify", opts),
   onState: (callback) => {
     if (typeof callback !== "function") {
       return;

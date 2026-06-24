@@ -332,8 +332,16 @@ function renderService() {
   elements.servicePort.textContent = String(service.port || appState.bootstrap?.form?.port || 8765);
   elements.serviceMessage.textContent = service.message || "等待启动。";
   elements.cliStatus.textContent = liveState.cliStatus;
+  // Apply service log filter
+  const serviceFilter = elements.logFilterService?.value || "all";
+  const filteredServiceLogs = (service.logs || []).filter((line) => {
+    if (serviceFilter === "all") return true;
+    if (serviceFilter === "device") return line.includes("client") || line.includes("hello") || line.includes("device") || line.includes("discovery");
+    if (serviceFilter === "bridge") return line.includes("[bridge]");
+    return true;
+  });
   elements.serviceLogTail.textContent =
-    service.logs && service.logs.length > 0 ? service.logs.join("\n") : "等待启动。";
+    filteredServiceLogs.length > 0 ? filteredServiceLogs.join("\n") : "等待启动。";
   elements.startServiceButton.disabled = service.status === "running" || service.status === "starting";
   elements.restartServiceButton.disabled = service.status === "starting";
   elements.stopServiceButton.disabled = service.status === "stopped" || service.status === "needs_setup";
@@ -481,6 +489,15 @@ function handleBridgeMessage(message) {
   if (message.type === "device_event") {
     // Refresh device list immediately on connect/disconnect
     refreshDeviceAndStatus();
+    // Notify on device disconnect
+    if (message.event === "disconnected" && message.deviceId) {
+      try {
+        window.vibeApp.notify({
+          title: "设备断开",
+          body: `${message.deviceId} (${message.boardType || "unknown"}) 已断开连接`
+        });
+      } catch { /* ignore */ }
+    }
     return;
   }
 
