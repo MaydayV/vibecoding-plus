@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cerrno>
+#include <fcntl.h>
 #include <cstring>
 #include <cstdio>
 #include <ctime>
@@ -21,6 +22,8 @@
 #include <vector>
 
 #include <esp_sleep.h>
+#include <esp_wifi.h>
+#include <esp_netif.h>
 
 #include "board.h"
 #include "boards/zectrix-s3-epaper-4.2/config.h"
@@ -73,11 +76,15 @@ constexpr int kDiscoveryAttempts = 3;
 constexpr int kDiscoveryTimeoutMs = 600;
 constexpr int kDiscoveryRetryDelayMs = 150;
 constexpr int64_t kReconnectIntervalMinMs = 2000;
-constexpr int64_t kReconnectIntervalMaxMs = 60000;
+constexpr int64_t kReconnectIntervalMaxMs = 15000;
 constexpr int64_t kClientPingIntervalMs = 10000;
 constexpr int64_t kPongTimeoutMs = 15000;
 constexpr int64_t kServerSilenceTimeoutMs = 45000;
 constexpr int64_t kConnectAttemptWatchdogMs = 20000;
+constexpr int kReconnectFailuresBeforeWifiRecovery = 3;
+constexpr int64_t kWifiRecoveryCooldownMs = 30000;
+constexpr int64_t kOfflineSleepRetryAwakeMs = 60000;  // 1 minute retry window after timer wake
+constexpr int64_t kOfflineSleepRetryIntervalUs = 15LL * 60 * 1000 * 1000;  // 15 minutes
 constexpr int64_t kReconnectPromptTimeoutMs = 15000;
 constexpr int64_t kTodoBootHoldMs = 600;
 constexpr int64_t kTodoBootDoubleClickWindowMs = 250;
@@ -989,6 +996,11 @@ bool LanMicApp::DiscoverServerUri() {
                 continue;
             }
 
+            // Set non-blocking mode — ESP32/lwIP's SO_RCVTIMEO does not
+            // reliably wake recvfrom(), so we use select() instead.
+            int flags = fcntl(sock, F_GETFL, 0);
+            fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
             const int64_t deadline_us = esp_timer_get_time() + (kDiscoveryTimeoutMs * 1000LL);
             while (esp_timer_get_time() < deadline_us) {
                 const int64_t remaining_us = deadline_us - esp_timer_get_time();
@@ -996,10 +1008,16 @@ bool LanMicApp::DiscoverServerUri() {
                     break;
                 }
 
-                struct timeval timeout = {};
-                timeout.tv_sec = remaining_us / 1000000;
-                timeout.tv_usec = remaining_us % 1000000;
-                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+                fd_set read_fds;
+                FD_ZERO(&read_fds);
+                FD_SET(sock, &read_fds);
+                struct timeval select_timeout = {};
+                select_timeout.tv_sec = remaining_us / 1000000;
+                select_timeout.tv_usec = remaining_us % 1000000;
+                const int select_result = select(sock + 1, &read_fds, nullptr, nullptr, &select_timeout);
+                if (select_result <= 0) {
+                    continue;
+                }
 
                 char response_buffer[512];
                 struct sockaddr_in source_addr = {};
@@ -1011,7 +1029,10 @@ bool LanMicApp::DiscoverServerUri() {
                                               reinterpret_cast<struct sockaddr*>(&source_addr),
                                               &source_addr_len);
                 if (received <= 0) {
-                    continue;
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        continue;
+                    }
+                    break;
                 }
 
                 response_buffer[received] = '\0';
@@ -1204,6 +1225,63 @@ void LanMicApp::DisconnectWebSocket() {
     }
     hello_sent_ = false;
     preroll_frames_.clear();
+}
+
+void LanMicApp::RecoverWifiForReconnect(const char* reason) {
+    ESP_LOGW(kTag, "WiFi recovery triggered: %s", reason ? reason : "unknown");
+    // Cancel any in-flight connect attempt
+    if (connect_attempt_running_.load(std::memory_order_acquire)) {
+        connect_cancel_requested_.store(true, std::memory_order_release);
+        // Wait briefly for the connect task to notice the cancel
+        for (int i = 0; i < 20 && connect_attempt_running_.load(std::memory_order_acquire); ++i) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    }
+    DisconnectWebSocket();
+    server_uri_.clear();
+    last_wifi_recovery_ms_ = esp_timer_get_time() / 1000;
+
+    // Reset WiFi: disconnect, clear IP cache, reconnect
+    esp_wifi_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif != nullptr) {
+        esp_netif_dhcpc_stop(netif);
+        esp_netif_dhcpc_start(netif);
+    }
+    esp_wifi_connect();
+
+    network_state_ = NetworkState::Offline;
+    status_text_ = "重置 WiFi";
+    hint_text_ = reason ? reason : "正在恢复连接...";
+    phase_ = Phase::Idle;
+    if (active_page_ != Page::Todo || !offline_todo_mode_) {
+        active_page_ = Page::Summary;
+    }
+    UpdateDisplay();
+}
+
+void LanMicApp::EnterOfflineDeepSleep() {
+    ESP_LOGI(kTag, "Entering offline deep sleep after prolonged disconnection");
+    DisconnectWebSocket();
+    board_.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+
+    // Persist any pending offline todo state before sleeping
+    if (offline_todo_mode_) {
+        SaveCachedTodoState();
+        SavePendingTodoOps();
+    }
+
+    // Wake sources: BOOT button + 15-minute timer
+    esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BOOT_BUTTON_GPIO), 0);
+    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(kOfflineSleepRetryIntervalUs));
+
+    status_text_ = "省电休眠";
+    hint_text_ = "按 BOOT 或等 15 分钟唤醒";
+    UpdateDisplay();
+    vTaskDelay(pdMS_TO_TICKS(500));  // Let display update before sleeping
+
+    esp_deep_sleep_start();
 }
 
 bool LanMicApp::IsPttPressed() const {
@@ -3302,6 +3380,7 @@ void LanMicApp::Run() {
             reconnect_stuck_prompt_ = false;
             if (IsServerConnected()) {
                 reconnect_interval_ms = kReconnectIntervalMinMs;
+                reconnect_failure_count_ = 0;
                 disconnected_since_ms = now_ms;
                 last_ws_ping_ms = 0;
                 awaiting_pong_since_ms = 0;
@@ -3310,6 +3389,14 @@ void LanMicApp::Run() {
                 reconnect_interval_ms = kReconnectIntervalMinMs;
             } else {
                 reconnect_interval_ms = std::min(reconnect_interval_ms * 2, kReconnectIntervalMaxMs);
+                reconnect_failure_count_++;
+                // After N consecutive failures, try WiFi recovery
+                if (reconnect_failure_count_ >= kReconnectFailuresBeforeWifiRecovery &&
+                    (now_ms - last_wifi_recovery_ms_) >= kWifiRecoveryCooldownMs) {
+                    RecoverWifiForReconnect("连续重连失败");
+                    reconnect_interval_ms = kReconnectIntervalMinMs;
+                    last_reconnect_ms = now_ms;
+                }
             }
         }
         const int64_t connect_attempt_started_ms =
@@ -3322,17 +3409,25 @@ void LanMicApp::Run() {
                      "Connect attempt watchdog fired: started_ms=%lld now_ms=%lld",
                      static_cast<long long>(connect_attempt_started_ms),
                      static_cast<long long>(now_ms));
-            reconnect_stuck_prompt_ = true;
-            offline_todo_mode_ = true;
-            todo_menu_kind_ = TodoMenuKind::ReconnectStuck;
-            todo_menu_selected_item_ = 0;
-            todo_menu_open_ = true;
-            reconnect_prompt_started_ms = now_ms;
-            status_text_ = "重连卡住";
-            hint_text_ = "请选择操作";
-            phase_ = Phase::Error;
-            active_page_ = Page::Todo;
-            UpdateDisplay();
+            // Try WiFi recovery first before showing stuck prompt
+            if ((now_ms - last_wifi_recovery_ms_) >= kWifiRecoveryCooldownMs) {
+                RecoverWifiForReconnect("连接看门狗");
+                reconnect_interval_ms = kReconnectIntervalMinMs;
+                last_reconnect_ms = now_ms;
+            } else {
+                // WiFi recovery was recent; show manual stuck prompt
+                reconnect_stuck_prompt_ = true;
+                offline_todo_mode_ = true;
+                todo_menu_kind_ = TodoMenuKind::ReconnectStuck;
+                todo_menu_selected_item_ = 0;
+                todo_menu_open_ = true;
+                reconnect_prompt_started_ms = now_ms;
+                status_text_ = "重连卡住";
+                hint_text_ = "请选择操作";
+                phase_ = Phase::Error;
+                active_page_ = Page::Todo;
+                UpdateDisplay();
+            }
         }
         if (ws_disconnected_pending_.exchange(false)) {
             hello_sent_ = false;
@@ -3349,6 +3444,7 @@ void LanMicApp::Run() {
             }
             disconnected_since_ms = now_ms;
             reconnect_interval_ms = kReconnectIntervalMinMs;
+            reconnect_failure_count_ = 0;
             last_reconnect_ms = 0;
             last_ws_ping_ms = 0;
             awaiting_pong_since_ms = 0;
@@ -3491,6 +3587,13 @@ void LanMicApp::Run() {
                     last_pressed = false;
                 }
             }
+            // Deep sleep after prolonged disconnection to preserve battery
+            if (!todo_menu_open_ &&
+                !has_pending_transcript_ &&
+                (now_ms - disconnected_since_ms) >= kNoConnectionSleepMs) {
+                EnterOfflineDeepSleep();
+                // Never reaches here — deep sleep does not return
+            }
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
@@ -3503,6 +3606,17 @@ void LanMicApp::Run() {
             board_.SetPowerSaveLevel(PowerSaveLevel::BALANCED);
             last_reconnect_ms = now_ms;
             StartConnectAttemptAsync();
+        }
+
+        // Deep sleep for WiFi-connected-but-server-unreachable after prolonged disconnection
+        if (IsWifiConnected() &&
+            !IsServerConnected() &&
+            !connect_attempt_running_.load(std::memory_order_acquire) &&
+            !todo_menu_open_ &&
+            !has_pending_transcript_ &&
+            (now_ms - disconnected_since_ms) >= kNoConnectionSleepMs) {
+            EnterOfflineDeepSleep();
+            // Never reaches here
         }
 
         if (IsWifiConnected() &&

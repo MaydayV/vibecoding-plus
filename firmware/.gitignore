@@ -1,4 +1,5 @@
 build/
 build_*/
+managed_components/
 sdkconfig.old
 *.log

@@ -20,7 +20,7 @@ ES module Node.js application (requires Node >= 20). Single dependency: `ws` for
 ### Module Graph
 
 ```
-server.mjs (entry point — HTTP + WebSocket server)
+client/server/src/server.mjs (entry point — HTTP + WebSocket server)
 ├── config.mjs           — loads .env, resolves paths, auto-detects CLI shims on Windows
 ├── discovery-server.mjs — UDP broadcast listener for device discovery
 │   └── lan-auth.mjs     — HMAC-SHA256 signing for discovery replies
@@ -33,8 +33,7 @@ server.mjs (entry point — HTTP + WebSocket server)
 ├── stt.mjs              — speech-to-text (OpenAI Whisper / Volcengine ASR)
 │   ├── wav.mjs          — PCM16 → WAV header conversion
 │   └── paths.mjs        — resolves project root from import.meta.url
-└── text-injector.mjs    — Windows-only text injection via PowerShell + clipboard
-    └── scripts/inject-text.ps1
+└── text-injector.mjs    — text injection via clipboard + hotkey (macOS / Windows)
 ```
 
 ### Protocol Flow
@@ -49,7 +48,7 @@ server.mjs (entry point — HTTP + WebSocket server)
 
 - **Audio format**: 16kHz mono PCM16 (signed 16-bit LE)
 - **Authentication**: HMAC-SHA256 with message format `type|field1|field2|...`, nonce replay protection, configurable timestamp window (default 300s)
-- **Text injection**: Uses clipboard + Ctrl+V + restores previous clipboard (Windows PowerShell only)
+- **Text injection**: Uses clipboard + Cmd+V + restores previous clipboard (macOS AppleScript); falls back to PowerShell on Windows
 - **Codex session**: Spawns via PowerShell wrapper, tracks thread ID for `codex exec resume` continuity
 - **CLI projector**: Maintains rolling 8-line log buffer, truncates for e-paper constraints
 

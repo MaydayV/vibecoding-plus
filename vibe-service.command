@@ -69,7 +69,7 @@ start_service() {
     sleep 1
   fi
 
-  if ! tmux new-session -d -s "$SESSION_NAME" "cd '$PROJECT_DIR' && VIBE_INVOKE_CWD='$PROJECT_DIR' REMINDCTL_PATH='$REMINDCTL_BIN' node src/server.mjs >> '$LOG_FILE' 2>&1"; then
+  if ! tmux new-session -d -s "$SESSION_NAME" "cd '$PROJECT_DIR' && VIBE_INVOKE_CWD='$PROJECT_DIR' REMINDCTL_PATH='$REMINDCTL_BIN' node client/server/src/server.mjs >> '$LOG_FILE' 2>&1"; then
     echo "服务启动失败，请查看日志：$LOG_FILE"
     return 1
   fi

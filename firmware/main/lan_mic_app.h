@@ -48,6 +48,8 @@ private:
     std::atomic<bool> manual_reconnect_requested_{false};
     std::atomic<int64_t> connect_attempt_started_ms_{0};
     std::atomic<bool> wifi_reconfigure_restart_pending_{false};
+    int reconnect_failure_count_ = 0;
+    int64_t last_wifi_recovery_ms_ = 0;
     TaskHandle_t connect_task_handle_ = nullptr;
     bool has_pending_transcript_ = false;
     std::string send_target_;         // received from server_ready: "claude_code" | "codex_exec" | "text_injector"
@@ -175,6 +177,8 @@ private:
     std::string HmacSha256Hex(const std::vector<std::string>& parts) const;
     void EnterWifiSetupMode();
     void DisconnectWebSocket();
+    void RecoverWifiForReconnect(const char* reason = "");
+    void EnterOfflineDeepSleep();
     bool IsPttPressed() const;
     bool IsNavButtonPressed(gpio_num_t gpio_num) const;
     bool SendJson(const char* json);
