@@ -1,21 +1,21 @@
-const elements = {
+/* ===== VibeCoding Plus — Renderer (sidebar + e-paper theme) ===== */
+
+// ─── Element refs ───
+const el = {
   statusPill: document.querySelector("#status-pill"),
   serviceMode: document.querySelector("#service-mode"),
+  serviceModeDisplay: document.querySelector("#service-mode-display"),
   servicePort: document.querySelector("#service-port"),
   cliStatus: document.querySelector("#cli-status"),
   serviceMessage: document.querySelector("#service-message"),
   configIssues: document.querySelector("#config-issues"),
-  overrideFiles: document.querySelector("#override-files"),
   deviceCount: document.querySelector("#device-count"),
   serviceUptime: document.querySelector("#service-uptime"),
   serviceStt: document.querySelector("#service-stt"),
   serviceDiscovery: document.querySelector("#service-discovery"),
   serviceClients: document.querySelector("#service-clients"),
-  deviceListSection: document.querySelector("#device-list-section"),
   deviceList: document.querySelector("#device-list"),
   form: document.querySelector("#settings-form"),
-  tabButtons: [...document.querySelectorAll("[data-tab-trigger]")],
-  tabPanels: [...document.querySelectorAll("[data-tab-panel]")],
   sendTarget: document.querySelector("#send-target"),
   sttProvider: document.querySelector("#stt-provider"),
   transcriptDeliveryMode: document.querySelector("#transcript-delivery-mode"),
@@ -43,12 +43,6 @@ const elements = {
   closeToTray: document.querySelector("#close-to-tray"),
   codexSkipGitRepoCheck: document.querySelector("#codex-skip-git-repo-check"),
   claudeDangerouslySkipPermissions: document.querySelector("#claude-dangerously-skip-permissions"),
-  summaryMode: document.querySelector("#summary-mode"),
-  summaryDelivery: document.querySelector("#summary-delivery"),
-  summaryProvider: document.querySelector("#summary-provider"),
-  summaryProviderDetail: document.querySelector("#summary-provider-detail"),
-  summaryLaunch: document.querySelector("#summary-launch"),
-  summaryWindowBehavior: document.querySelector("#summary-window-behavior"),
   userConfigPath: document.querySelector("#user-config-path"),
   desktopSettingsPath: document.querySelector("#desktop-settings-path"),
   lastTranscript: document.querySelector("#last-transcript"),
@@ -62,645 +56,349 @@ const elements = {
   saveSettingsButton: document.querySelector("#save-settings-button"),
   openConfigFolderButton: document.querySelector("#open-config-folder-button"),
   pickCodexCwdButton: document.querySelector("#pick-codex-cwd-button"),
-  pickClaudeCwdButton: document.querySelector("#pick-claude-cwd-button")
+  pickClaudeCwdButton: document.querySelector("#pick-claude-cwd-button"),
+  discoverDevicesButton: document.querySelector("#discover-devices-button"),
+  refreshDevicesButton: document.querySelector("#refresh-devices-button"),
+  navDeviceBadge: document.querySelector("#nav-device-badge"),
+  logFilterCli: document.querySelector("#log-filter-cli"),
+  logFilterService: document.querySelector("#log-filter-service"),
 };
 
-const liveState = {
-  transcript: "",
-  userText: "",
-  assistantText: "",
-  cliStatus: "尚未连接",
-  cliLogLines: []
-};
+// ─── State ───
+const live = { transcript: "", userText: "", assistantText: "", cliStatus: "尚未连接", cliLogLines: [] };
+const app = { bootstrap: null, service: null, socket: null, reconnectTimer: null, socketPort: null };
+let deviceRefreshTimer = null;
 
-const appState = {
-  bootstrap: null,
-  service: null,
-  socket: null,
-  reconnectTimer: null,
-  socketPort: null
-};
+// ─── Helpers ───
+function esc(s) { return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 
-function modeLabel(mode) {
-  if (mode === "claude_code") {
-    return "Claude Code";
-  }
-  if (mode === "codex_exec") {
-    return "Codex";
-  }
+function modeLabel(m) {
+  if (m === "claude_code") return "Claude Code";
+  if (m === "codex_exec") return "Codex";
   return "输入注入";
 }
 
-function providerLabel(provider) {
-  if (provider === "openai") {
-    return "OpenAI";
-  }
-  if (provider === "whisper_cpp") {
-    return "whisper.cpp (local)";
-  }
-  if (provider === "qwen_asr") {
-    return "Qwen3-ASR";
-  }
+function providerLabel(p) {
+  if (p === "openai") return "OpenAI";
+  if (p === "whisper_cpp") return "whisper.cpp";
+  if (p === "qwen_asr") return "Qwen3-ASR";
   return "Volcengine";
 }
 
-function deliveryLabel(mode) {
-  return mode === "immediate" ? "识别完成立即发送" : "设备确认后发送";
-}
-
-function injectionLabel(mode) {
-  return mode === "type_only" ? "仅输入文本" : "输入并回车";
-}
-
-function launchLabel({ autoLaunch, launchToTray }) {
-  if (autoLaunch && launchToTray) {
-    return "开机后隐藏启动";
-  }
-  if (autoLaunch) {
-    return "开机自启";
-  }
-  return "手动启动";
-}
-
-function windowBehaviorLabel({ closeToTray }) {
-  return closeToTray ? "关闭窗口时最小化到托盘" : "关闭窗口后仍保留界面";
-}
-
-function statusClass(status) {
-  if (status === "running") {
-    return "status-running";
-  }
-  if (status === "starting") {
-    return "status-starting";
-  }
-  if (status === "needs_setup") {
-    return "status-warning";
-  }
-  if (status === "error") {
-    return "status-error";
-  }
-  return "status-stopped";
-}
-
-function serviceStatusLabel(status) {
-  if (status === "running") {
-    return "运行中";
-  }
-  if (status === "starting") {
-    return "启动中";
-  }
-  if (status === "needs_setup") {
-    return "待配置";
-  }
-  if (status === "error") {
-    return "异常";
-  }
+function statusLabel(s) {
+  if (s === "running") return "运行中";
+  if (s === "starting") return "启动中";
+  if (s === "needs_setup") return "待配置";
+  if (s === "error") return "异常";
   return "已停止";
 }
 
-function setActiveTab(tabName) {
-  elements.tabButtons.forEach((button) => {
-    const isActive = button.getAttribute("data-tab-trigger") === tabName;
-    button.classList.toggle("is-active", isActive);
-    button.setAttribute("aria-selected", String(isActive));
-  });
-
-  elements.tabPanels.forEach((panel) => {
-    const isActive = panel.getAttribute("data-tab-panel") === tabName;
-    panel.classList.toggle("hidden", !isActive);
-    panel.classList.toggle("is-active", isActive);
-  });
-
-  // Lazy-load admin iframe on first activation
-  if (tabName === "admin") {
-    const iframe = document.querySelector("#admin-iframe");
-    if (iframe && iframe.src === "about:blank") {
-      const port = appState.bootstrap?.form?.port || appState.service?.port || 8765;
-      iframe.src = `http://127.0.0.1:${port}/admin`;
-    }
-  }
+function formatUptime(sec) {
+  if (!sec || sec < 1) return "--";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h > 0 ? `${h}小时${m}分` : `${m}分钟`;
 }
 
-function updateProviderVisibility() {
-  const activeProvider = elements.sttProvider.value;
-  document.querySelectorAll("[data-provider-section]").forEach((section) => {
-    const enabled = section.getAttribute("data-provider-section") === activeProvider;
-    section.classList.toggle("hidden", !enabled);
-  });
-}
-
-function updateModeVisibility() {
-  const activeMode = elements.sendTarget.value;
-  document.querySelectorAll("[data-mode-visible]").forEach((section) => {
-    const enabled = section.getAttribute("data-mode-visible") === activeMode;
-    section.classList.toggle("hidden", !enabled);
-  });
-}
-
-function renderConfigSummary() {
-  elements.summaryMode.textContent = modeLabel(elements.sendTarget.value);
-  elements.summaryDelivery.textContent =
-    elements.sendTarget.value === "text_injector"
-      ? `${deliveryLabel(elements.transcriptDeliveryMode.value)} · ${injectionLabel(elements.textInjectionMode.value)}`
-      : deliveryLabel(elements.transcriptDeliveryMode.value);
-  elements.summaryProvider.textContent = providerLabel(elements.sttProvider.value);
-  if (elements.sttProvider.value === "openai") {
-    elements.summaryProviderDetail.textContent = `模型：${elements.openaiModel.value || "whisper-1"}`;
-  } else if (elements.sttProvider.value === "whisper_cpp") {
-    elements.summaryProviderDetail.textContent = `本地模型：${elements.whisperCppModelPath.value || "(未设置)"}`;
-  } else if (elements.sttProvider.value === "qwen_asr") {
-    const model = elements.qwenAsrModel.value || "qwen3-asr-flash-realtime";
-    elements.summaryProviderDetail.textContent = `realtime_ws · ${model}`;
-  } else {
-    elements.summaryProviderDetail.textContent = "适合中文语音环境";
-  }
-  elements.summaryLaunch.textContent = launchLabel({
-    autoLaunch: elements.autoLaunch.checked,
-    launchToTray: elements.launchToTray.checked
-  });
-  elements.summaryWindowBehavior.textContent = windowBehaviorLabel({
-    closeToTray: elements.closeToTray.checked
-  });
-}
-
-function updateFormAffordances() {
-  updateProviderVisibility();
-  updateModeVisibility();
-  renderConfigSummary();
-}
-
-function collectFormPayload() {
-  return {
-    form: {
-      sendTarget: elements.sendTarget.value,
-      sttProvider: elements.sttProvider.value,
-      transcriptDeliveryMode: elements.transcriptDeliveryMode.value,
-      textInjectionMode: elements.textInjectionMode.value,
-      openaiApiKey: elements.openaiApiKey.value,
-      openaiModel: elements.openaiModel.value,
-      volcengineAppKey: elements.volcengineAppKey.value,
-      volcengineAccessKey: elements.volcengineAccessKey.value,
-      whisperCppModelPath: elements.whisperCppModelPath.value,
-      whisperCppLanguage: elements.whisperCppLanguage.value,
-      whisperCppThreads: elements.whisperCppThreads.value,
-      whisperCppCommand: elements.whisperCppCommand.value,
-      whisperCppExtraArgs: elements.whisperCppExtraArgs.value,
-      qwenAsrApiKey: elements.qwenAsrApiKey.value,
-      qwenAsrModel: elements.qwenAsrModel.value,
-      qwenAsrLanguage: elements.qwenAsrLanguage.value,
-      qwenAsrPrompt: elements.qwenAsrPrompt.value,
-      qwenAsrSampleRate: elements.qwenAsrSampleRate.value,
-      qwenAsrRealtimeBaseUrl: elements.qwenAsrRealtimeBaseUrl.value,
-      lanSharedSecret: elements.lanSharedSecret.value,
-      codexCwd: elements.codexCwd.value,
-      claudeCwd: elements.claudeCwd.value,
-      codexSkipGitRepoCheck: elements.codexSkipGitRepoCheck.checked,
-      claudeDangerouslySkipPermissions: elements.claudeDangerouslySkipPermissions.checked
-    },
-    desktopSettings: {
-      autoLaunch: elements.autoLaunch.checked,
-      launchToTray: elements.launchToTray.checked,
-      closeToTray: elements.closeToTray.checked
-    }
-  };
-}
-
-function fillForm(form, desktopSettingsPath) {
-  elements.sendTarget.value = form.sendTarget;
-  elements.sttProvider.value = form.sttProvider;
-  elements.transcriptDeliveryMode.value = form.transcriptDeliveryMode;
-  elements.textInjectionMode.value = form.textInjectionMode;
-  elements.openaiApiKey.value = form.openaiApiKey || "";
-  elements.openaiModel.value = form.openaiModel || "";
-  elements.volcengineAppKey.value = form.volcengineAppKey || "";
-  elements.volcengineAccessKey.value = form.volcengineAccessKey || "";
-  elements.whisperCppModelPath.value = form.whisperCppModelPath || "";
-  elements.whisperCppLanguage.value = form.whisperCppLanguage || "";
-  elements.whisperCppThreads.value = form.whisperCppThreads || "";
-  elements.whisperCppCommand.value = form.whisperCppCommand || "";
-  elements.whisperCppExtraArgs.value = form.whisperCppExtraArgs || "";
-  elements.qwenAsrApiKey.value = form.qwenAsrApiKey || "";
-  elements.qwenAsrModel.value = form.qwenAsrModel || "";
-  elements.qwenAsrLanguage.value = form.qwenAsrLanguage || "";
-  elements.qwenAsrPrompt.value = form.qwenAsrPrompt || "";
-  elements.qwenAsrSampleRate.value = form.qwenAsrSampleRate || "";
-  elements.qwenAsrRealtimeBaseUrl.value = form.qwenAsrRealtimeBaseUrl || "";
-  elements.lanSharedSecret.value = form.lanSharedSecret || "";
-  elements.codexCwd.value = form.codexCwd || "";
-  elements.claudeCwd.value = form.claudeCwd || "";
-  elements.autoLaunch.checked = Boolean(form.desktopSettings?.autoLaunch);
-  elements.launchToTray.checked = Boolean(form.desktopSettings?.launchToTray);
-  elements.closeToTray.checked = Boolean(form.desktopSettings?.closeToTray);
-  elements.codexSkipGitRepoCheck.checked = Boolean(form.codexSkipGitRepoCheck);
-  elements.claudeDangerouslySkipPermissions.checked = Boolean(form.claudeDangerouslySkipPermissions);
-  elements.userConfigPath.textContent = form.userConfigPath || "";
-  elements.desktopSettingsPath.textContent = desktopSettingsPath || "";
-  updateFormAffordances();
-}
-
-function renderNotices(form) {
-  const issues = form.configIssues || [];
-  const overrideFiles = form.overrideFiles || [];
-
-  if (issues.length > 0) {
-    elements.configIssues.textContent = `当前配置不完整：${issues.join(" ")}`;
-    elements.configIssues.classList.remove("hidden");
-  } else {
-    elements.configIssues.classList.add("hidden");
-  }
-
-  if (overrideFiles.length > 0) {
-    elements.overrideFiles.textContent = [
-      "注意：以下配置文件会覆盖用户配置，界面里保存的值可能不会立即生效：",
-      ...overrideFiles.map((filePath) => `• ${filePath}`)
-    ].join("\n");
-    elements.overrideFiles.classList.remove("hidden");
-  } else {
-    elements.overrideFiles.classList.add("hidden");
-  }
-}
-
-function renderService() {
-  const service = appState.service || appState.bootstrap?.service;
-  if (!service) {
-    return;
-  }
-
-  elements.statusPill.textContent = serviceStatusLabel(service.status);
-  elements.statusPill.className = `status-pill ${statusClass(service.status)}`;
-  elements.serviceMode.textContent = modeLabel(service.mode);
-  elements.servicePort.textContent = String(service.port || appState.bootstrap?.form?.port || 8765);
-  elements.serviceMessage.textContent = service.message || "等待启动。";
-  elements.cliStatus.textContent = liveState.cliStatus;
-  // Apply service log filter
-  const serviceFilter = elements.logFilterService?.value || "all";
-  const filteredServiceLogs = (service.logs || []).filter((line) => {
-    if (serviceFilter === "all") return true;
-    if (serviceFilter === "device") return line.includes("client") || line.includes("hello") || line.includes("device") || line.includes("discovery");
-    if (serviceFilter === "bridge") return line.includes("[bridge]");
-    return true;
-  });
-  elements.serviceLogTail.textContent =
-    filteredServiceLogs.length > 0 ? filteredServiceLogs.join("\n") : "等待启动。";
-  elements.startServiceButton.disabled = service.status === "running" || service.status === "starting";
-  elements.restartServiceButton.disabled = service.status === "starting";
-  elements.stopServiceButton.disabled = service.status === "stopped" || service.status === "needs_setup";
-
-  if (service.status === "running") {
-    refreshDeviceAndStatus();
-    if (!deviceRefreshTimer) {
-      deviceRefreshTimer = setInterval(refreshDeviceAndStatus, 5000);
-    }
-  } else {
-    elements.deviceCount.textContent = "0";
-    elements.serviceUptime.textContent = "--";
-    elements.serviceStt.textContent = "--";
-    elements.deviceListSection.classList.add("hidden");
-    if (deviceRefreshTimer) {
-      clearInterval(deviceRefreshTimer);
-      deviceRefreshTimer = null;
-    }
-  }
-}
-
-function renderLive() {
-  elements.lastTranscript.textContent = liveState.transcript || "还没有收到语音";
-  elements.lastUserText.textContent = liveState.userText || "等待中";
-  elements.lastAssistantText.textContent = liveState.assistantText || "等待中";
-  elements.cliLogTail.textContent =
-    liveState.cliLogLines.length > 0 ? liveState.cliLogLines.join("\n") : "尚未连接。";
-}
-
-function formatUptime(seconds) {
-  if (!seconds || seconds < 1) return "--";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}小时${m}分`;
-  return `${m}分钟`;
-}
-
-function formatConnectedAt(ts) {
+function formatTime(ts) {
   if (!ts) return "";
   const d = new Date(ts);
   if (isNaN(d.getTime())) return "";
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-let deviceRefreshTimer = null;
-
-async function refreshDeviceAndStatus() {
-  try {
-    const [devRes, statusRes] = await Promise.all([
-      window.vibeApp.getDevices(),
-      window.vibeApp.getServiceStatus()
-    ]);
-
-    if (devRes.ok) {
-      const devices = devRes.devices || [];
-      elements.deviceCount.textContent = String(devices.length);
-      if (devices.length > 0) {
-        elements.deviceListSection.classList.remove("hidden");
-        elements.deviceList.innerHTML = devices.map((d) => `
-          <div class="device-card">
-            <span class="device-id">${escapeHtml(d.deviceId)}</span>
-            <span class="device-meta">${escapeHtml(d.boardType || d.voiceMode || "")}</span>
-            <span class="device-ip">${escapeHtml(d.remoteAddress || "")}</span>
-            <span class="device-time">${formatConnectedAt(d.connectedAt)}</span>
-          </div>
-        `).join("");
-      } else {
-        elements.deviceListSection.classList.add("hidden");
-        elements.deviceList.innerHTML = "";
+// ─── Navigation ───
+document.querySelectorAll(".nav-item").forEach((item) => {
+  item.addEventListener("click", () => {
+    const target = item.dataset.nav;
+    document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("is-active"));
+    item.classList.add("is-active");
+    document.querySelectorAll(".page").forEach((p) => {
+      p.classList.toggle("is-active", p.dataset.page === target);
+    });
+    // Lazy-load admin iframe
+    if (target === "admin") {
+      const iframe = el.adminIframe || document.querySelector("#admin-iframe");
+      if (iframe && iframe.src === "about:blank") {
+        const port = app.bootstrap?.form?.port || app.service?.port || 8765;
+        iframe.src = `http://127.0.0.1:${port}/admin`;
       }
     }
+  });
+});
 
-    if (statusRes.ok) {
-      elements.serviceUptime.textContent = formatUptime(statusRes.uptime);
-      elements.serviceStt.textContent = statusRes.sttProvider || "--";
-      elements.serviceDiscovery.textContent = statusRes.discoveryEnabled ? "已启用" : "已禁用";
-      elements.serviceClients.textContent = String(statusRes.clientCount ?? 0);
+// Settings sub-tabs
+document.querySelectorAll(".stab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    const target = tab.dataset.stab;
+    document.querySelectorAll(".stab").forEach((t) => t.classList.toggle("is-active", t === tab));
+    document.querySelectorAll(".stab-panel").forEach((p) => {
+      p.classList.toggle("is-active", p.dataset.stabPanel === target);
+      p.classList.toggle("hidden", p.dataset.stabPanel !== target);
+    });
+  });
+});
+
+// ─── Provider / mode visibility ───
+function updateVisibility() {
+  const provider = el.sttProvider.value;
+  document.querySelectorAll("[data-provider-section]").forEach((s) => {
+    s.classList.toggle("is-visible", s.dataset.providerSection === provider);
+    s.classList.toggle("hidden", s.dataset.providerSection !== provider);
+  });
+  const mode = el.sendTarget.value;
+  document.querySelectorAll("[data-mode-visible]").forEach((s) => {
+    s.classList.toggle("hidden", s.dataset.modeVisible !== mode);
+  });
+}
+
+// ─── Render service state ───
+function renderService() {
+  const svc = app.service || app.bootstrap?.service;
+  if (!svc) return;
+
+  const status = svc.status;
+  el.statusPill.textContent = statusLabel(status);
+  el.statusPill.className = `status-pill status-${status}`;
+  el.serviceMode.textContent = modeLabel(svc.mode);
+  el.serviceModeDisplay.textContent = modeLabel(svc.mode);
+  el.servicePort.textContent = String(svc.port || 8765);
+  el.serviceMessage.textContent = svc.message || "";
+  el.cliStatus.textContent = live.cliStatus;
+
+  // Service log with filter
+  const filter = el.logFilterService?.value || "all";
+  const logs = (svc.logs || []).filter((line) => {
+    if (filter === "all") return true;
+    if (filter === "device") return /client|hello|device|discovery/i.test(line);
+    if (filter === "bridge") return /\[bridge\]/.test(line);
+    return true;
+  });
+  el.serviceLogTail.textContent = logs.length ? logs.join("\n") : "等待启动。";
+
+  el.startServiceButton.disabled = status === "running" || status === "starting";
+  el.restartServiceButton.disabled = status === "starting";
+  el.stopServiceButton.disabled = status === "stopped" || status === "needs_setup";
+
+  if (status === "running") {
+    refreshDeviceAndStatus();
+    if (!deviceRefreshTimer) deviceRefreshTimer = setInterval(refreshDeviceAndStatus, 5000);
+  } else {
+    el.deviceCount.textContent = "0";
+    el.serviceUptime.textContent = "--";
+    el.serviceStt.textContent = "--";
+    el.serviceDiscovery.textContent = "--";
+    el.serviceClients.textContent = "--";
+    el.navDeviceBadge.classList.add("hidden");
+    if (deviceRefreshTimer) { clearInterval(deviceRefreshTimer); deviceRefreshTimer = null; }
+  }
+}
+
+// ─── Render live feed ───
+function renderLive() {
+  el.lastTranscript.textContent = live.transcript || "还没有收到语音";
+  el.lastUserText.textContent = live.userText || "等待中";
+  el.lastAssistantText.textContent = live.assistantText || "等待中";
+  const filter = el.logFilterCli?.value || "all";
+  const lines = live.cliLogLines.filter((line) => {
+    if (filter === "all") return true;
+    if (filter === "transcript") return /转写|transcript/i.test(line);
+    if (filter === "user") return /user|用户/i.test(line);
+    if (filter === "assistant") return /assistant|AI|回复/i.test(line);
+    return true;
+  });
+  el.cliLogTail.textContent = lines.length ? lines.join("\n") : "尚未连接。";
+}
+
+// ─── Device list ───
+async function refreshDeviceAndStatus() {
+  try {
+    const [devRes, stRes] = await Promise.all([window.vibeApp.getDevices(), window.vibeApp.getServiceStatus()]);
+    if (devRes.ok) {
+      const devices = devRes.devices || [];
+      el.deviceCount.textContent = String(devices.length);
+      if (devices.length > 0) {
+        el.navDeviceBadge.textContent = String(devices.length);
+        el.navDeviceBadge.classList.remove("hidden");
+      } else {
+        el.navDeviceBadge.classList.add("hidden");
+      }
+      el.deviceList.innerHTML = devices.length
+        ? devices.map((d) => `
+          <div class="device-card">
+            <span class="device-id">${esc(d.deviceId)}</span>
+            <span class="device-meta">${esc(d.boardType || d.voiceMode || "")}</span>
+            <span class="device-ip">${esc(d.remoteAddress || "")}</span>
+            <span class="device-time">${formatTime(d.connectedAt)}</span>
+          </div>
+        `).join("")
+        : '<div class="empty-state">暂无设备连接</div>';
     }
-  } catch {
-    // silently ignore polling errors
-  }
+    if (stRes.ok) {
+      el.serviceUptime.textContent = formatUptime(stRes.uptime);
+      el.serviceStt.textContent = stRes.sttProvider || "--";
+      el.serviceDiscovery.textContent = stRes.discoveryEnabled ? "已启用" : "已禁用";
+      el.serviceClients.textContent = String(stRes.clientCount ?? 0);
+    }
+  } catch { /* ignore */ }
 }
 
-function escapeHtml(str) {
-  return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-function resetLiveConnection() {
-  if (appState.socket) {
-    appState.socket.close();
-    appState.socket = null;
-  }
-  appState.socketPort = null;
-  if (appState.reconnectTimer) {
-    clearTimeout(appState.reconnectTimer);
-    appState.reconnectTimer = null;
-  }
+// ─── WebSocket live connection ───
+function resetSocket() {
+  if (app.socket) { app.socket.close(); app.socket = null; }
+  app.socketPort = null;
+  if (app.reconnectTimer) { clearTimeout(app.reconnectTimer); app.reconnectTimer = null; }
 }
 
 function scheduleReconnect() {
-  if (appState.reconnectTimer) {
-    return;
-  }
-  appState.reconnectTimer = setTimeout(() => {
-    appState.reconnectTimer = null;
-    connectLiveSocket();
-  }, 1200);
+  if (app.reconnectTimer) return;
+  app.reconnectTimer = setTimeout(() => { app.reconnectTimer = null; connectSocket(); }, 1200);
 }
 
-function handleBridgeMessage(message) {
-  if (message.type === "server_ready") {
-    liveState.cliStatus = `已连接 · ${modeLabel(message.sendTarget)}`;
-    if (message.sendTarget) {
-      elements.serviceMode.textContent = modeLabel(message.sendTarget);
-    }
+function handleMessage(msg) {
+  if (msg.type === "server_ready") {
+    live.cliStatus = `已连接 · ${modeLabel(msg.sendTarget)}`;
+    if (msg.sendTarget) el.serviceMode.textContent = modeLabel(msg.sendTarget);
     renderService();
-    return;
-  }
-
-  if (message.type === "cli_session_state") {
-    liveState.cliStatus = message.statusLine || message.phase || "待命";
+  } else if (msg.type === "cli_session_state") {
+    live.cliStatus = msg.statusLine || msg.phase || "待命";
     renderService();
-    return;
-  }
-
-  if (message.type === "cli_summary") {
-    if (message.latestUserText !== undefined) {
-      liveState.userText = message.latestUserText || "";
-    }
-    if (message.latestAssistantText !== undefined) {
-      liveState.assistantText = message.latestAssistantText || "";
-    }
+  } else if (msg.type === "cli_summary") {
+    if (msg.latestUserText !== undefined) live.userText = msg.latestUserText || "";
+    if (msg.latestAssistantText !== undefined) live.assistantText = msg.latestAssistantText || "";
     renderLive();
-    return;
-  }
-
-  if (message.type === "cli_log_tail") {
-    liveState.cliLogLines = Array.isArray(message.lines) ? message.lines : [];
+  } else if (msg.type === "cli_log_tail") {
+    live.cliLogLines = Array.isArray(msg.lines) ? msg.lines : [];
     renderLive();
-    return;
-  }
-
-  if (message.type === "device_event") {
-    // Refresh device list immediately on connect/disconnect
+  } else if (msg.type === "transcript_final") {
+    live.transcript = msg.text || "";
+    renderLive();
+  } else if (msg.type === "status" && msg.text) {
+    live.transcript = msg.text;
+    renderLive();
+  } else if (msg.type === "device_event") {
     refreshDeviceAndStatus();
-    // Notify on device disconnect
-    if (message.event === "disconnected" && message.deviceId) {
-      try {
-        window.vibeApp.notify({
-          title: "设备断开",
-          body: `${message.deviceId} (${message.boardType || "unknown"}) 已断开连接`
-        });
-      } catch { /* ignore */ }
+    if (msg.event === "disconnected" && msg.deviceId) {
+      try { window.vibeApp.notify({ title: "设备断开", body: `${msg.deviceId} 已断开` }); } catch {}
     }
-    return;
-  }
-
-  if (message.type === "transcript_final") {
-    liveState.transcript = message.text || "";
-    renderLive();
-    return;
-  }
-
-  if (message.type === "status" && message.text) {
-    liveState.transcript = message.text;
-    renderLive();
   }
 }
 
-function connectLiveSocket() {
-  const service = appState.service || appState.bootstrap?.service;
-  if (!service || (service.status !== "running" && service.status !== "starting")) {
-    resetLiveConnection();
-    liveState.cliStatus = "服务未连接";
-    renderService();
-    return;
+function connectSocket() {
+  const svc = app.service || app.bootstrap?.service;
+  if (!svc || (svc.status !== "running" && svc.status !== "starting")) {
+    resetSocket(); live.cliStatus = "服务未连接"; renderService(); return;
   }
-
-  const port = service.port || appState.bootstrap?.form?.port || 8765;
-  if (
-    appState.socket &&
-    appState.socketPort === port &&
-    (appState.socket.readyState === WebSocket.OPEN || appState.socket.readyState === WebSocket.CONNECTING)
-  ) {
-    return;
-  }
-
-  resetLiveConnection();
-
-  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
-  appState.socket = socket;
-  appState.socketPort = port;
-
-  socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: "hello", deviceId: "desktop-window", boardType: "desktop-window" }));
-  });
-
-  socket.addEventListener("message", (event) => {
-    try {
-      const message = JSON.parse(String(event.data));
-      handleBridgeMessage(message);
-    } catch {
-      // ignore malformed messages
-    }
-  });
-
-  socket.addEventListener("close", () => {
-    if (appState.socket === socket) {
-      appState.socket = null;
-      appState.socketPort = null;
-    }
-    liveState.cliStatus = "连接已断开";
-    renderService();
-    scheduleReconnect();
-  });
-
-  socket.addEventListener("error", () => {
-    liveState.cliStatus = "无法连接到本地服务";
-    renderService();
-  });
+  const port = svc.port || 8765;
+  if (app.socket && app.socketPort === port && (app.socket.readyState === WebSocket.OPEN || app.socket.readyState === WebSocket.CONNECTING)) return;
+  resetSocket();
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  app.socket = ws; app.socketPort = port;
+  ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "hello", deviceId: "desktop-window", boardType: "desktop-window" })));
+  ws.addEventListener("message", (e) => { try { handleMessage(JSON.parse(String(e.data))); } catch {} });
+  ws.addEventListener("close", () => { if (app.socket === ws) { app.socket = null; app.socketPort = null; } live.cliStatus = "连接已断开"; renderService(); scheduleReconnect(); });
+  ws.addEventListener("error", () => { live.cliStatus = "无法连接到本地服务"; renderService(); });
 }
 
-async function refreshBootstrap() {
-  const bootstrap = await window.vibeApp.getBootstrap();
-  appState.bootstrap = bootstrap;
-  appState.service = bootstrap.service;
-  fillForm(bootstrap.form, bootstrap.desktopSettingsPath);
-  renderNotices(bootstrap.form);
-  renderService();
-  renderLive();
-  connectLiveSocket();
-}
-
-async function chooseDirectory(targetInput) {
-  const nextValue = await window.vibeApp.pickDirectory(targetInput.value);
-  if (nextValue) {
-    targetInput.value = nextValue;
-    updateFormAffordances();
-  }
-}
-
-elements.tabButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    setActiveTab(button.getAttribute("data-tab-trigger"));
-  });
-});
-
-elements.sttProvider.addEventListener("change", updateFormAffordances);
-elements.sendTarget.addEventListener("change", updateFormAffordances);
-elements.transcriptDeliveryMode.addEventListener("change", renderConfigSummary);
-elements.textInjectionMode.addEventListener("change", renderConfigSummary);
-elements.openaiModel.addEventListener("input", renderConfigSummary);
-elements.whisperCppModelPath.addEventListener("input", renderConfigSummary);
-elements.qwenAsrModel.addEventListener("input", renderConfigSummary);
-elements.autoLaunch.addEventListener("change", renderConfigSummary);
-elements.launchToTray.addEventListener("change", renderConfigSummary);
-elements.closeToTray.addEventListener("change", renderConfigSummary);
-
-elements.form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  elements.saveSettingsButton.disabled = true;
-  try {
-    const bootstrap = await window.vibeApp.saveConfig(collectFormPayload());
-    appState.bootstrap = bootstrap;
-    appState.service = bootstrap.service;
-    fillForm(bootstrap.form, bootstrap.desktopSettingsPath);
-    renderNotices(bootstrap.form);
-    renderService();
-    connectLiveSocket();
-  } finally {
-    elements.saveSettingsButton.disabled = false;
-  }
-});
-
-elements.startServiceButton.addEventListener("click", async () => {
-  const bootstrap = await window.vibeApp.startService();
-  appState.bootstrap = bootstrap;
-  appState.service = bootstrap.service;
-  renderService();
-  connectLiveSocket();
-});
-
-elements.restartServiceButton.addEventListener("click", async () => {
-  const bootstrap = await window.vibeApp.restartService();
-  appState.bootstrap = bootstrap;
-  appState.service = bootstrap.service;
-  renderService();
-  connectLiveSocket();
-});
-
-elements.stopServiceButton.addEventListener("click", async () => {
-  const bootstrap = await window.vibeApp.stopService();
-  appState.bootstrap = bootstrap;
-  appState.service = bootstrap.service;
-  renderService();
-  connectLiveSocket();
-});
-
-elements.openConfigFolderButton.addEventListener("click", async () => {
-  const bootstrap = await window.vibeApp.openConfigFolder();
-  appState.bootstrap = bootstrap;
-  appState.service = bootstrap.service;
-  renderService();
-});
-
-// Theme toggle
-const toggleThemeButton = document.querySelector("#toggle-theme-button");
-if (toggleThemeButton) {
-  const applyTheme = (theme) => {
-    if (theme === "light") {
-      document.documentElement.classList.add("light");
-      toggleThemeButton.textContent = "☀️";
-    } else {
-      document.documentElement.classList.remove("light");
-      toggleThemeButton.textContent = "🌙";
-    }
+// ─── Form ───
+function collectForm() {
+  return {
+    form: {
+      sendTarget: el.sendTarget.value, sttProvider: el.sttProvider.value,
+      transcriptDeliveryMode: el.transcriptDeliveryMode.value, textInjectionMode: el.textInjectionMode.value,
+      openaiApiKey: el.openaiApiKey.value, openaiModel: el.openaiModel.value,
+      volcengineAppKey: el.volcengineAppKey.value, volcengineAccessKey: el.volcengineAccessKey.value,
+      whisperCppModelPath: el.whisperCppModelPath.value, whisperCppLanguage: el.whisperCppLanguage.value,
+      whisperCppThreads: el.whisperCppThreads.value, whisperCppCommand: el.whisperCppCommand.value,
+      whisperCppExtraArgs: el.whisperCppExtraArgs.value,
+      qwenAsrApiKey: el.qwenAsrApiKey.value, qwenAsrModel: el.qwenAsrModel.value,
+      qwenAsrLanguage: el.qwenAsrLanguage.value, qwenAsrPrompt: el.qwenAsrPrompt.value,
+      qwenAsrSampleRate: el.qwenAsrSampleRate.value, qwenAsrRealtimeBaseUrl: el.qwenAsrRealtimeBaseUrl.value,
+      lanSharedSecret: el.lanSharedSecret.value,
+      codexCwd: el.codexCwd.value, claudeCwd: el.claudeCwd.value,
+      codexSkipGitRepoCheck: el.codexSkipGitRepoCheck.checked,
+      claudeDangerouslySkipPermissions: el.claudeDangerouslySkipPermissions.checked,
+    },
+    desktopSettings: { autoLaunch: el.autoLaunch.checked, launchToTray: el.launchToTray.checked, closeToTray: el.closeToTray.checked },
   };
-  // Load saved theme
-  const savedTheme = localStorage.getItem("vibe-theme") || "dark";
-  applyTheme(savedTheme);
-  toggleThemeButton.addEventListener("click", () => {
-    const next = document.documentElement.classList.contains("light") ? "dark" : "light";
-    localStorage.setItem("vibe-theme", next);
-    applyTheme(next);
-  });
 }
 
-elements.pickCodexCwdButton.addEventListener("click", () => chooseDirectory(elements.codexCwd));
-elements.pickClaudeCwdButton.addEventListener("click", () => chooseDirectory(elements.claudeCwd));
-
-const refreshDevicesButton = document.querySelector("#refresh-devices-button");
-if (refreshDevicesButton) {
-  refreshDevicesButton.addEventListener("click", () => refreshDeviceAndStatus());
+function fillForm(f, dsp) {
+  el.sendTarget.value = f.sendTarget; el.sttProvider.value = f.sttProvider;
+  el.transcriptDeliveryMode.value = f.transcriptDeliveryMode; el.textInjectionMode.value = f.textInjectionMode;
+  el.openaiApiKey.value = f.openaiApiKey || ""; el.openaiModel.value = f.openaiModel || "";
+  el.volcengineAppKey.value = f.volcengineAppKey || ""; el.volcengineAccessKey.value = f.volcengineAccessKey || "";
+  el.whisperCppModelPath.value = f.whisperCppModelPath || ""; el.whisperCppLanguage.value = f.whisperCppLanguage || "";
+  el.whisperCppThreads.value = f.whisperCppThreads || ""; el.whisperCppCommand.value = f.whisperCppCommand || "";
+  el.whisperCppExtraArgs.value = f.whisperCppExtraArgs || "";
+  el.qwenAsrApiKey.value = f.qwenAsrApiKey || ""; el.qwenAsrModel.value = f.qwenAsrModel || "";
+  el.qwenAsrLanguage.value = f.qwenAsrLanguage || ""; el.qwenAsrPrompt.value = f.qwenAsrPrompt || "";
+  el.qwenAsrSampleRate.value = f.qwenAsrSampleRate || ""; el.qwenAsrRealtimeBaseUrl.value = f.qwenAsrRealtimeBaseUrl || "";
+  el.lanSharedSecret.value = f.lanSharedSecret || "";
+  el.codexCwd.value = f.codexCwd || ""; el.claudeCwd.value = f.claudeCwd || "";
+  el.autoLaunch.checked = Boolean(f.desktopSettings?.autoLaunch);
+  el.launchToTray.checked = Boolean(f.desktopSettings?.launchToTray);
+  el.closeToTray.checked = Boolean(f.desktopSettings?.closeToTray);
+  el.codexSkipGitRepoCheck.checked = Boolean(f.codexSkipGitRepoCheck);
+  el.claudeDangerouslySkipPermissions.checked = Boolean(f.claudeDangerouslySkipPermissions);
+  el.userConfigPath.textContent = f.userConfigPath || "";
+  el.desktopSettingsPath.textContent = dsp || "";
+  updateVisibility();
 }
 
-const discoverDevicesButton = document.querySelector("#discover-devices-button");
-if (discoverDevicesButton) {
-  discoverDevicesButton.addEventListener("click", async () => {
-    discoverDevicesButton.disabled = true;
-    discoverDevicesButton.textContent = "发送中...";
-    try {
-      await window.vibeApp.adminApi("POST", "/api/admin/discover");
-      // Wait a moment for devices to respond, then refresh
-      setTimeout(() => refreshDeviceAndStatus(), 3000);
-    } catch {
-      // ignore
-    }
-    discoverDevicesButton.textContent = "重新发现";
-    discoverDevicesButton.disabled = false;
-  });
-}
+// ─── Event wiring ───
+el.sttProvider.addEventListener("change", updateVisibility);
+el.sendTarget.addEventListener("change", updateVisibility);
 
-window.vibeApp.onState((payload) => {
-  appState.service = payload.service;
-  renderService();
-  connectLiveSocket();
+el.form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  el.saveSettingsButton.disabled = true;
+  try {
+    const b = await window.vibeApp.saveConfig(collectForm());
+    app.bootstrap = b; app.service = b.service;
+    fillForm(b.form, b.desktopSettingsPath);
+    renderService(); connectSocket();
+  } finally { el.saveSettingsButton.disabled = false; }
 });
 
-setActiveTab("basics");
-await refreshBootstrap();
+el.startServiceButton.addEventListener("click", async () => {
+  const b = await window.vibeApp.startService(); app.bootstrap = b; app.service = b.service; renderService(); connectSocket();
+});
+el.restartServiceButton.addEventListener("click", async () => {
+  const b = await window.vibeApp.restartService(); app.bootstrap = b; app.service = b.service; renderService(); connectSocket();
+});
+el.stopServiceButton.addEventListener("click", async () => {
+  const b = await window.vibeApp.stopService(); app.bootstrap = b; app.service = b.service; renderService(); connectSocket();
+});
+el.openConfigFolderButton.addEventListener("click", async () => {
+  const b = await window.vibeApp.openConfigFolder(); app.bootstrap = b; app.service = b.service; renderService();
+});
+el.pickCodexCwdButton.addEventListener("click", async () => {
+  const v = await window.vibeApp.pickDirectory(el.codexCwd.value); if (v) el.codexCwd.value = v;
+});
+el.pickClaudeCwdButton.addEventListener("click", async () => {
+  const v = await window.vibeApp.pickDirectory(el.claudeCwd.value); if (v) el.claudeCwd.value = v;
+});
+
+if (el.refreshDevicesButton) el.refreshDevicesButton.addEventListener("click", () => refreshDeviceAndStatus());
+if (el.discoverDevicesButton) {
+  el.discoverDevicesButton.addEventListener("click", async () => {
+    el.discoverDevicesButton.disabled = true; el.discoverDevicesButton.textContent = "发送中...";
+    try { await window.vibeApp.adminApi("POST", "/api/admin/discover"); setTimeout(() => refreshDeviceAndStatus(), 3000); } catch {}
+    el.discoverDevicesButton.textContent = "重新发现"; el.discoverDevicesButton.disabled = false;
+  });
+}
+
+el.logFilterCli?.addEventListener("change", renderLive);
+el.logFilterService?.addEventListener("change", renderService);
+
+window.vibeApp.onState((payload) => { app.service = payload.service; renderService(); connectSocket(); });
+
+// ─── Init ───
+async function init() {
+  const b = await window.vibeApp.getBootstrap();
+  app.bootstrap = b; app.service = b.service;
+  fillForm(b.form, b.desktopSettingsPath);
+  renderService(); renderLive(); connectSocket();
+}
+
+init();
