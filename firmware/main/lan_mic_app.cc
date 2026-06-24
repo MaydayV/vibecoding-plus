@@ -3498,6 +3498,9 @@ void LanMicApp::Run() {
         if (!IsServerConnected() &&
             !connect_attempt_running_.load(std::memory_order_acquire) &&
             (now_ms - last_reconnect_ms) >= reconnect_interval_ms) {
+            // Ensure WiFi is not in deep power-save so discovery broadcasts
+            // can actually be sent and received.
+            board_.SetPowerSaveLevel(PowerSaveLevel::BALANCED);
             last_reconnect_ms = now_ms;
             StartConnectAttemptAsync();
         }
