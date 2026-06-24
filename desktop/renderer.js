@@ -9,6 +9,8 @@ const elements = {
   deviceCount: document.querySelector("#device-count"),
   serviceUptime: document.querySelector("#service-uptime"),
   serviceStt: document.querySelector("#service-stt"),
+  serviceDiscovery: document.querySelector("#service-discovery"),
+  serviceClients: document.querySelector("#service-clients"),
   deviceListSection: document.querySelector("#device-list-section"),
   deviceList: document.querySelector("#device-list"),
   form: document.querySelector("#settings-form"),
@@ -369,6 +371,15 @@ function formatUptime(seconds) {
   return `${m}分钟`;
 }
 
+function formatConnectedAt(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "";
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 let deviceRefreshTimer = null;
 
 async function refreshDeviceAndStatus() {
@@ -388,6 +399,7 @@ async function refreshDeviceAndStatus() {
             <span class="device-id">${escapeHtml(d.deviceId)}</span>
             <span class="device-meta">${escapeHtml(d.boardType || d.voiceMode || "")}</span>
             <span class="device-ip">${escapeHtml(d.remoteAddress || "")}</span>
+            <span class="device-time">${formatConnectedAt(d.connectedAt)}</span>
           </div>
         `).join("");
       } else {
@@ -399,6 +411,8 @@ async function refreshDeviceAndStatus() {
     if (statusRes.ok) {
       elements.serviceUptime.textContent = formatUptime(statusRes.uptime);
       elements.serviceStt.textContent = statusRes.sttProvider || "--";
+      elements.serviceDiscovery.textContent = statusRes.discoveryEnabled ? "已启用" : "已禁用";
+      elements.serviceClients.textContent = String(statusRes.clientCount ?? 0);
     }
   } catch {
     // silently ignore polling errors
@@ -461,6 +475,12 @@ function handleBridgeMessage(message) {
   if (message.type === "cli_log_tail") {
     liveState.cliLogLines = Array.isArray(message.lines) ? message.lines : [];
     renderLive();
+    return;
+  }
+
+  if (message.type === "device_event") {
+    // Refresh device list immediately on connect/disconnect
+    refreshDeviceAndStatus();
     return;
   }
 
@@ -618,6 +638,23 @@ elements.pickClaudeCwdButton.addEventListener("click", () => chooseDirectory(ele
 const refreshDevicesButton = document.querySelector("#refresh-devices-button");
 if (refreshDevicesButton) {
   refreshDevicesButton.addEventListener("click", () => refreshDeviceAndStatus());
+}
+
+const discoverDevicesButton = document.querySelector("#discover-devices-button");
+if (discoverDevicesButton) {
+  discoverDevicesButton.addEventListener("click", async () => {
+    discoverDevicesButton.disabled = true;
+    discoverDevicesButton.textContent = "发送中...";
+    try {
+      await window.vibeApp.adminApi("POST", "/api/admin/discover");
+      // Wait a moment for devices to respond, then refresh
+      setTimeout(() => refreshDeviceAndStatus(), 3000);
+    } catch {
+      // ignore
+    }
+    discoverDevicesButton.textContent = "重新发现";
+    discoverDevicesButton.disabled = false;
+  });
 }
 
 window.vibeApp.onState((payload) => {

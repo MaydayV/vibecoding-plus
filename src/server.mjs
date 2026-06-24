@@ -1422,8 +1422,10 @@ function broadcastJson(payload) {
 function createClientState() {
   return {
     deviceId: "unknown",
+    boardType: "unknown",
     authenticated: !config.lanSharedSecret,
     voiceMode: "normal",
+    connectedAt: Date.now(),
     segmentActive: false,
     chunks: [],
     audioBytes: 0,
@@ -2088,12 +2090,24 @@ wss.on("connection", (ws, req) => {
             }
           }
           state.authenticated = true;
+          state.boardType = message.boardType || "unknown";
           restorePendingTodoIntentForState(state);
-          log("hello", { deviceId: state.deviceId, boardType: message.boardType || "unknown" });
+          log("hello", { deviceId: state.deviceId, boardType: state.boardType });
           sendJson(ws, { type: "hello_ack", deviceId: state.deviceId });
           emitServerReady(ws);
           sendJson(ws, buildDisplayConfigPayload());
           emitCliSnapshot(ws);
+          // Broadcast device connect to all other desktop clients
+          for (const client of wss.clients) {
+            if (client !== ws && client.readyState === 1) {
+              sendJson(client, {
+                type: "device_event",
+                event: "connected",
+                deviceId: state.deviceId,
+                boardType: state.boardType
+              });
+            }
+          }
           break;
         case "ptt_start":
           if (!state.authenticated) {
@@ -2348,6 +2362,17 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     clearPendingTodoIntent(state);
     log("client disconnected", state.deviceId);
+    // Broadcast device disconnect to all remaining desktop clients
+    for (const client of wss.clients) {
+      if (client !== ws && client.readyState === 1) {
+        sendJson(client, {
+          type: "device_event",
+          event: "disconnected",
+          deviceId: state.deviceId,
+          boardType: state.boardType
+        });
+      }
+    }
   });
 
   ws.on("error", (error) => {

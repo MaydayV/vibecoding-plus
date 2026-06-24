@@ -640,6 +640,13 @@ select:focus {
   font-size: 12px;
 }
 
+.device-time {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 40px;
+  text-align: right;
+}
+
 /* Admin panel iframe */
 .admin-iframe-wrap {
   width: 100%;
@@ -675,4 +682,9 @@ select:focus {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.device-actions {
+  display: flex;
+  gap: 6px;
 }

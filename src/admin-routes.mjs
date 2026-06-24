@@ -246,8 +246,10 @@ export function createAdminRoutes(options) {
             if (!st || !st.authenticated) continue;
             devices.push({
               deviceId: st.deviceId || "unknown",
+              boardType: st.boardType || "unknown",
               voiceMode: st.voiceMode || "normal",
-              remoteAddress: client._socket?.remoteAddress || ""
+              remoteAddress: client._socket?.remoteAddress || "",
+              connectedAt: st.connectedAt || null
             });
           }
         }
@@ -497,6 +499,36 @@ export function createAdminRoutes(options) {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         sendJsonResponse(res, 500, { ok: false, error: message || "restart_failed" });
+      }
+      return true;
+    }
+
+    if (pathname === "/api/admin/discover" && req.method === "POST") {
+      // Send a dummy UDP broadcast to trigger device re-discovery
+      // Devices listening for broadcasts will respond
+      const dgram = await import("node:dgram");
+      const sock = dgram.createSocket("udp4");
+      try {
+        await new Promise((resolve, reject) => {
+          sock.bind(0, () => {
+            sock.setBroadcast(true);
+            const msg = JSON.stringify({
+              type: "discover_host",
+              service: "vibecoding-plus",
+              deviceId: "admin-trigger",
+              nonce: `reconnect-${Date.now()}`
+            });
+            sock.send(msg, config.discoveryPort || 8766, "255.255.255.255", (err) => {
+              sock.close();
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+        });
+        sendJsonResponse(res, 200, { ok: true, message: "discovery_broadcast_sent" });
+      } catch (error) {
+        try { sock.close(); } catch {}
+        sendJsonResponse(res, 500, { ok: false, error: error.message || "discover_failed" });
       }
       return true;
     }

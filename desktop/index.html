@@ -63,6 +63,14 @@
               <span class="status-label">语音识别</span>
               <strong id="service-stt">--</strong>
             </article>
+            <article class="status-card">
+              <span class="status-label">发现服务</span>
+              <strong id="service-discovery">--</strong>
+            </article>
+            <article class="status-card">
+              <span class="status-label">活跃连接</span>
+              <strong id="service-clients">--</strong>
+            </article>
           </div>
 
           <div class="notice-stack">
@@ -74,7 +82,10 @@
           <div id="device-list-section" class="device-list-section hidden">
             <div class="device-list-header">
               <h3>已连接设备</h3>
-              <button id="refresh-devices-button" class="button button-subtle button-sm" type="button">刷新</button>
+              <div class="device-actions">
+                <button id="discover-devices-button" class="button button-subtle button-sm" type="button">重新发现</button>
+                <button id="refresh-devices-button" class="button button-subtle button-sm" type="button">刷新</button>
+              </div>
             </div>
             <div id="device-list" class="device-list"></div>
           </div>
