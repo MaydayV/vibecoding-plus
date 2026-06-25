@@ -7,48 +7,91 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		1EF860B278C251C4A3DC6AF7 /* AdminAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B221E0CA89DEE843D149FD14 /* AdminAPIClient.swift */; };
+		075B3D9C4645FCFCFACCFFF6 /* STTService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54733654901D308D57343C4F /* STTService.swift */; };
 		3404843D0462ADCF9D5AE7B9 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8664D9B154FB0CE06F792243 /* Views.swift */; };
+		34F57545DBE953624E9D3107 /* DiscoveryServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55EAB939BC51E95066BA4266 /* DiscoveryServer.swift */; };
+		519DD4A059154AED4C4E3C3F /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47DC063FE3301366C1C8FEAA /* ServerConfig.swift */; };
 		5DCCE673B44B8CE9159E6CBE /* Shell.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2669562A2E45AC8088F783C /* Shell.swift */; };
+		62CD390FF6307F0BBDA699BB /* WebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 824B4651D7EDE8F937D5A589 /* WebSocketServer.swift */; };
 		7C6CD0D8DE9C9B54B6AF872D /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C974DF24328572829A67953 /* AppState.swift */; };
 		7EF8937854D6186A61399927 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D4AE1A179CEFA9C54CA7B17 /* Models.swift */; };
+		8D5062EC8F84AD064224D24B /* TodoService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29A2FE6304AC8D694B79E035 /* TodoService.swift */; };
+		8DC0CE2119845CFE6DF45067 /* CLISessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A00A64A1BEB3002D5B2749 /* CLISessionManager.swift */; };
+		936DD66A506024CF80FF5DFD /* LANAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEAD40F7C22916D32AE84FA5 /* LANAuth.swift */; };
+		9DED1F480725C4D72C98C2D1 /* TodoAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB9B42C3AF4B1CE5223B1B42 /* TodoAssistant.swift */; };
 		B06B341ECEC278269903D9D0 /* VibeCodingPlusNativeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91B803E2A0B089F9FE709D21 /* VibeCodingPlusNativeApp.swift */; };
+		B9ED150324A49DFA5B80977B /* RemindersSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100F9937AAED2DAADE9E92A2 /* RemindersSync.swift */; };
 		C4C77C75424DFABDF7FEF6AC /* EnvironmentChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C328FC676278EF5317D488DD /* EnvironmentChecker.swift */; };
+		C7751CA179417B95775122E9 /* NativeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 251A6D13EA88AEBF798AEAFD /* NativeServer.swift */; };
 		C7A72178687EA31719DFDB41 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195B5A4B9AE8D19B2C28EC0C /* AppDelegate.swift */; };
-		D16A67F1D5B6E6DE2FDE8A8E /* BridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7973752C3C822883F85FDE /* BridgeService.swift */; };
+		D12B2FB25B5790E60F6D6D4F /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85B6FFF1217771E95FD836D7 /* TextInjector.swift */; };
 		E28A7192E8C4912B22FA3664 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568FA0DD62FCBC98B87BAEA5 /* SettingsStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		100F9937AAED2DAADE9E92A2 /* RemindersSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemindersSync.swift; sourceTree = "<group>"; };
 		195B5A4B9AE8D19B2C28EC0C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		251A6D13EA88AEBF798AEAFD /* NativeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeServer.swift; sourceTree = "<group>"; };
+		29A2FE6304AC8D694B79E035 /* TodoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoService.swift; sourceTree = "<group>"; };
+		47DC063FE3301366C1C8FEAA /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
+		54733654901D308D57343C4F /* STTService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = STTService.swift; sourceTree = "<group>"; };
+		55EAB939BC51E95066BA4266 /* DiscoveryServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryServer.swift; sourceTree = "<group>"; };
 		568FA0DD62FCBC98B87BAEA5 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
-		7C7973752C3C822883F85FDE /* BridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeService.swift; sourceTree = "<group>"; };
+		824B4651D7EDE8F937D5A589 /* WebSocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServer.swift; sourceTree = "<group>"; };
+		85B6FFF1217771E95FD836D7 /* TextInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjector.swift; sourceTree = "<group>"; };
 		8664D9B154FB0CE06F792243 /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
 		91B803E2A0B089F9FE709D21 /* VibeCodingPlusNativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeCodingPlusNativeApp.swift; sourceTree = "<group>"; };
 		9C974DF24328572829A67953 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		9D4AE1A179CEFA9C54CA7B17 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
-		B221E0CA89DEE843D149FD14 /* AdminAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminAPIClient.swift; sourceTree = "<group>"; };
+		C0A00A64A1BEB3002D5B2749 /* CLISessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLISessionManager.swift; sourceTree = "<group>"; };
 		C2669562A2E45AC8088F783C /* Shell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shell.swift; sourceTree = "<group>"; };
 		C328FC676278EF5317D488DD /* EnvironmentChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentChecker.swift; sourceTree = "<group>"; };
 		C9D1E590A38C4C68E7AB5C01 /* VibeCodingPlusNative.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VibeCodingPlusNative.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CEAD40F7C22916D32AE84FA5 /* LANAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LANAuth.swift; sourceTree = "<group>"; };
+		DB9B42C3AF4B1CE5223B1B42 /* TodoAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoAssistant.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		100F4A60027DB05C7DC6044E /* Server */ = {
+			isa = PBXGroup;
+			children = (
+				55EAB939BC51E95066BA4266 /* DiscoveryServer.swift */,
+				CEAD40F7C22916D32AE84FA5 /* LANAuth.swift */,
+				251A6D13EA88AEBF798AEAFD /* NativeServer.swift */,
+				47DC063FE3301366C1C8FEAA /* ServerConfig.swift */,
+				824B4651D7EDE8F937D5A589 /* WebSocketServer.swift */,
+			);
+			path = Server;
+			sourceTree = "<group>";
+		};
 		3F6DFDEB6176981D01E30367 /* VibeCodingPlusNative */ = {
 			isa = PBXGroup;
 			children = (
-				B221E0CA89DEE843D149FD14 /* AdminAPIClient.swift */,
 				195B5A4B9AE8D19B2C28EC0C /* AppDelegate.swift */,
 				9C974DF24328572829A67953 /* AppState.swift */,
-				7C7973752C3C822883F85FDE /* BridgeService.swift */,
 				C328FC676278EF5317D488DD /* EnvironmentChecker.swift */,
 				9D4AE1A179CEFA9C54CA7B17 /* Models.swift */,
 				568FA0DD62FCBC98B87BAEA5 /* SettingsStore.swift */,
 				C2669562A2E45AC8088F783C /* Shell.swift */,
 				91B803E2A0B089F9FE709D21 /* VibeCodingPlusNativeApp.swift */,
 				8664D9B154FB0CE06F792243 /* Views.swift */,
+				100F4A60027DB05C7DC6044E /* Server */,
+				4944D414A2D6E0C77DACAF06 /* Services */,
 			);
 			path = VibeCodingPlusNative;
+			sourceTree = "<group>";
+		};
+		4944D414A2D6E0C77DACAF06 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				C0A00A64A1BEB3002D5B2749 /* CLISessionManager.swift */,
+				100F9937AAED2DAADE9E92A2 /* RemindersSync.swift */,
+				54733654901D308D57343C4F /* STTService.swift */,
+				85B6FFF1217771E95FD836D7 /* TextInjector.swift */,
+				DB9B42C3AF4B1CE5223B1B42 /* TodoAssistant.swift */,
+				29A2FE6304AC8D694B79E035 /* TodoService.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 		82F3974B34E70E4DEE6D8D94 /* Sources */ = {
@@ -134,16 +177,25 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1EF860B278C251C4A3DC6AF7 /* AdminAPIClient.swift in Sources */,
 				C7A72178687EA31719DFDB41 /* AppDelegate.swift in Sources */,
 				7C6CD0D8DE9C9B54B6AF872D /* AppState.swift in Sources */,
-				D16A67F1D5B6E6DE2FDE8A8E /* BridgeService.swift in Sources */,
+				8DC0CE2119845CFE6DF45067 /* CLISessionManager.swift in Sources */,
+				34F57545DBE953624E9D3107 /* DiscoveryServer.swift in Sources */,
 				C4C77C75424DFABDF7FEF6AC /* EnvironmentChecker.swift in Sources */,
+				936DD66A506024CF80FF5DFD /* LANAuth.swift in Sources */,
 				7EF8937854D6186A61399927 /* Models.swift in Sources */,
+				C7751CA179417B95775122E9 /* NativeServer.swift in Sources */,
+				B9ED150324A49DFA5B80977B /* RemindersSync.swift in Sources */,
+				075B3D9C4645FCFCFACCFFF6 /* STTService.swift in Sources */,
+				519DD4A059154AED4C4E3C3F /* ServerConfig.swift in Sources */,
 				E28A7192E8C4912B22FA3664 /* SettingsStore.swift in Sources */,
 				5DCCE673B44B8CE9159E6CBE /* Shell.swift in Sources */,
+				D12B2FB25B5790E60F6D6D4F /* TextInjector.swift in Sources */,
+				9DED1F480725C4D72C98C2D1 /* TodoAssistant.swift in Sources */,
+				8D5062EC8F84AD064224D24B /* TodoService.swift in Sources */,
 				B06B341ECEC278269903D9D0 /* VibeCodingPlusNativeApp.swift in Sources */,
 				3404843D0462ADCF9D5AE7B9 /* Views.swift in Sources */,
+				62CD390FF6307F0BBDA699BB /* WebSocketServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

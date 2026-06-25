@@ -22,6 +22,8 @@
   <string>15.0</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>VibeCoding Plus 需要使用 Apple Events 将语音转写文本注入到当前应用。</string>
+  <key>NSAccessibilityUsageDescription</key>
+  <string>VibeCoding Plus 需要辅助功能权限以将语音转写文本注入到当前应用。</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>VibeCoding Plus 需要麦克风用于按键说话和语音输入。</string>
   <key>NSRemindersUsageDescription</key>

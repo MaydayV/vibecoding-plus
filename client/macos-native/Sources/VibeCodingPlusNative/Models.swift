@@ -52,15 +52,6 @@ enum STTProvider: String, CaseIterable, Identifiable {
     }
 }
 
-struct ServiceSnapshot {
-    var status: ServiceStatus = .stopped
-    var message: String = "服务已停止"
-    var mode: SendTarget = .textInjector
-    var port: Int = 8765
-    var pid: Int32?
-    var logs: [String] = []
-}
-
 struct EnvironmentCheck: Identifiable, Codable {
     var id: String
     var label: String
@@ -120,11 +111,26 @@ struct AppConfig {
     var qwenAsrSampleRate: String = "16000"
     var qwenAsrRealtimeBaseUrl: String = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
     var lanSharedSecret: String = ""
+    var deepSeekApiKey: String = ""
+    var deepSeekModel: String = "deepseek-chat"
+    var deepSeekBaseUrl: String = "https://api.deepseek.com"
+    var claudeCommand: String = "claude"
+    var codexCommand: String = "codex"
+    var claudeMaxTurns: Int = 10
+    var mockTranscript: String = ""
     var codexCwd: String = ""
     var claudeCwd: String = ""
     var codexSkipGitRepoCheck: Bool = false
     var claudeDangerouslySkipPermissions: Bool = false
     var port: Int = 8765
+    var discoveryHostId: String = "VibeServer"
+    var discoveryPort: Int = 8766
+    var remindersSyncEnabled: Bool = false
+    var remindersListName: String = ""
+    var remindersPollSec: Int = 15
+    var displayTodoRefreshMs: Int = 2000
+    var displayCodingRefreshMs: Int = 2000
+    var displayStyle: String = "light"
 }
 
 struct DeviceInfo: Identifiable, Decodable {
@@ -140,6 +146,8 @@ struct DeviceInfo: Identifiable, Decodable {
 struct TodoSnapshot: Decodable {
     var items: [TodoItem] = []
     var archiveItems: [TodoItem] = []
+    var selectedIndex: Int = 0
+    var lastActionText: String = ""
 }
 
 struct TodoItem: Identifiable, Decodable {
@@ -158,7 +166,6 @@ struct ServiceStatusPayload: Decodable {
     var sendTarget: String?
     var discoveryEnabled: Bool?
     var port: Int?
-    var nodeVersion: String?
 }
 
 struct ReminderSyncStatus: Decodable {
@@ -166,9 +173,63 @@ struct ReminderSyncStatus: Decodable {
     var lastSyncAt: Double?
     var syncCount: Int?
     var lastError: String?
+    var remindctlPath: String?
+    var list: String?
+    var pollSec: Int?
 }
 
-struct ReminderSyncPayload: Decodable {
-    var ok: Bool
-    var status: ReminderSyncStatus?
+struct ReminderListInfo: Identifiable, Decodable {
+    var id: String
+    var title: String
+    var reminderCount: Int
+    var overdueCount: Int
+}
+
+struct DisplayConfig {
+    var todoRefreshMs: Int = 2000
+    var codingRefreshMs: Int = 2000
+    var style: String = "light"
+}
+
+struct LiveActivity {
+    var lastTranscript: String = ""
+    var lastUserText: String = ""
+    var lastAssistantText: String = ""
+    var cliStatus: String = ""
+    var cliLogLines: [String] = []
+    var serviceLogLines: [String] = []
+}
+
+enum LogFilter: String, CaseIterable, Identifiable {
+    case all
+    case transcript
+    case user
+    case assistant
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: "全部"
+        case .transcript: "语音识别"
+        case .user: "用户"
+        case .assistant: "AI"
+        }
+    }
+}
+
+enum ServiceLogFilter: String, CaseIterable, Identifiable {
+    case all
+    case device
+    case process
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: "全部"
+        case .device: "设备"
+        case .process: "进程"
+        }
+    }
 }

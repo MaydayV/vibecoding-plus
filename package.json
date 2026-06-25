@@ -4,15 +4,11 @@
   "private": false,
   "description": "Voice-driven AI coding bridge and macOS desktop app for ESP32 e-paper devices with Inject, Codex, and Claude modes.",
   "type": "module",
-  "main": "client/desktop/main.cjs",
   "files": [
     "client",
     ".env.example",
     "README.md"
   ],
-  "bin": {
-    "vibe": "client/server/scripts/vibe.mjs"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/MaydayV/vibecoding-plus.git"
@@ -25,22 +21,12 @@
     "access": "public"
   },
   "scripts": {
-    "start": "node client/server/src/server.mjs",
-    "doctor": "node client/server/src/server.mjs --doctor",
-    "test": "node --test client/server/test/*.test.mjs",
-    "console": "node client/server/scripts/console.mjs",
-    "vibe": "node client/server/scripts/vibe.mjs",
     "desktop:dev": "npm run native:open",
     "desktop:dist:mac": "npm run native:dist:mac",
-    "electron:dev": "electron .",
-    "electron:dist:mac": "electron-builder --mac dmg zip",
     "native:generate": "cd client/macos-native && if command -v xcodegen >/dev/null 2>&1; then xcodegen generate; else echo 'xcodegen not found; using checked-in Xcode project'; fi",
     "native:build": "npm run native:generate && cd client/macos-native && xcodebuild -project VibeCodingPlusNative.xcodeproj -scheme VibeCodingPlusNative -configuration Debug -destination 'platform=macOS' build",
     "native:dist:mac": "bash scripts/build-native-mac.sh",
     "native:open": "open client/macos-native/VibeCodingPlusNative.xcodeproj"
-  },
-  "engines": {
-    "node": ">=20"
   },
   "keywords": [
     "esp32",
@@ -48,53 +34,5 @@
     "codex",
     "websocket",
     "stt"
-  ],
-  "dependencies": {
-    "ws": "^8.18.3"
-  },
-  "devDependencies": {
-    "electron": "^35.7.5",
-    "electron-builder": "^26.0.12"
-  },
-  "build": {
-    "appId": "com.mac20777.vibecodingplus",
-    "productName": "VibeCoding Plus",
-    "directories": {
-      "output": "dist-desktop"
-    },
-    "files": [
-      "client/**/*",
-      "package.json",
-      "node_modules/ws/**/*"
-    ],
-    "asar": true,
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": ["arm64", "x64"]
-        },
-        {
-          "target": "zip",
-          "arch": ["arm64", "x64"]
-        }
-      ],
-      "icon": "client/desktop/assets/icon.png",
-      "category": "public.app-category.developer-tools",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false,
-      "extendInfo": {
-        "NSMicrophoneUsageDescription": "VibeCoding Plus uses the microphone for local push-to-talk voice input.",
-        "NSAppleEventsUsageDescription": "VibeCoding Plus uses Apple Events to inject transcribed text into the active application when Inject mode is enabled.",
-        "NSRemindersUsageDescription": "VibeCoding Plus can read and update Reminders when Apple Reminders sync is enabled."
-      }
-    },
-    "dmg": {
-      "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
-      ]
-    }
-  }
+  ]
 }

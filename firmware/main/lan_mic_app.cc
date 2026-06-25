@@ -60,6 +60,7 @@ namespace {
 
 constexpr char kTag[] = "LanMicApp";
 constexpr char kDiscoveryService[] = "vibecoding-plus";
+constexpr char kDefaultHostId[] = "VibeServer";
 constexpr char kLanMicNamespace[] = "lan_mic";
 constexpr char kVolumeKey[] = "volume";
 constexpr char kLastServerUriKey[] = "last_srv_uri";
@@ -523,6 +524,17 @@ void LanMicApp::LoadPersistedNetworkState() {
     paired_host_id_ = nvs.GetString(kPairedHostIdKey, "");
     paired_host_name_ = nvs.GetString(kPairedHostNameKey, "");
 
+    // Always use fixed host ID — ignore any previously paired value
+    if (paired_host_id_ != kDefaultHostId) {
+        ESP_LOGI(kTag, "Overriding paired host '%s' → '%s'",
+                 paired_host_id_.c_str(), kDefaultHostId);
+        paired_host_id_ = kDefaultHostId;
+        paired_host_name_.clear();
+        Settings nvs_write(kLanMicNamespace, true);
+        nvs_write.SetString(kPairedHostIdKey, kDefaultHostId);
+        nvs_write.EraseKey(kPairedHostNameKey);
+    }
+
     if (!paired_host_id_.empty()) {
         ESP_LOGI(kTag, "Loaded paired host: id=%s name=%s",
                  paired_host_id_.c_str(),
@@ -530,6 +542,11 @@ void LanMicApp::LoadPersistedNetworkState() {
     }
     if (!cached_server_uri_.empty()) {
         ESP_LOGI(kTag, "Loaded cached server URI: %s", cached_server_uri_.c_str());
+        if (cached_server_uri_.find(".local") != std::string::npos) {
+            ESP_LOGW(kTag, "Discarding mDNS cached server URI; discovery will refresh IP: %s",
+                     cached_server_uri_.c_str());
+            ClearCachedServerUri();
+        }
     }
     LoadCachedTodoState();
     LoadPendingTodoOps();
@@ -943,9 +960,7 @@ bool LanMicApp::DiscoverServerUri() {
         cJSON_AddStringToObject(request, "deviceId", board_.GetUuid().c_str());
         cJSON_AddStringToObject(request, "boardType", board_.GetBoardType().c_str());
         cJSON_AddStringToObject(request, "nonce", nonce.c_str());
-        if (!requested_host_id.empty()) {
-            cJSON_AddStringToObject(request, "expectedHostId", requested_host_id.c_str());
-        }
+        cJSON_AddStringToObject(request, "expectedHostId", requested_host_id.c_str());
 
         char* request_text = cJSON_PrintUnformatted(request);
         cJSON_Delete(request);
@@ -1188,11 +1203,8 @@ std::string LanMicApp::GetFallbackServerUri() const {
 }
 
 std::string LanMicApp::GetDiscoveryHintText() const {
-    if (!paired_host_name_.empty()) {
-        return "正在查找 " + paired_host_name_ + "...";
-    }
     if (!paired_host_id_.empty()) {
-        return "正在查找已配对主机...";
+        return "正在查找客户端...";
     }
     return "正在发现主机...";
 }

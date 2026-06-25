@@ -1,6 +1,8 @@
 import AppKit
 import Combine
 import Foundation
+import ServiceManagement
+import UserNotifications
 
 @MainActor
 final class AppState: ObservableObject {
@@ -12,11 +14,15 @@ final class AppState: ObservableObject {
     @Published var archivedTodos: [TodoItem] = []
     @Published var serviceStatus: ServiceStatusPayload?
     @Published var syncStatus: ReminderSyncStatus?
+    @Published var displayConfig = DisplayConfig()
+    @Published var reminderLists: [ReminderListInfo] = []
+    @Published var liveActivity = LiveActivity()
     @Published var installLog = ""
     @Published var inlineStatus = ""
     @Published var isBusy = false
+    @Published var serviceRunning = false
 
-    let bridge = BridgeService()
+    private var nativeServer: NativeServer?
     private let settingsStore = SettingsStore()
     private let checker = EnvironmentChecker()
 
@@ -25,27 +31,154 @@ final class AppState: ObservableObject {
         desktopSettings = settingsStore.loadDesktopSettings()
     }
 
-    var admin: AdminAPIClient {
-        AdminAPIClient(port: config.port)
+    // MARK: - ServerConfig Bridge
+
+    private func makeServerConfig() -> ServerConfig {
+        var sc = ServerConfig.load()
+        sc.sendTarget = config.sendTarget.rawValue
+        sc.sttProvider = config.sttProvider.rawValue
+        sc.transcriptDeliveryMode = config.transcriptDeliveryMode
+        sc.textInjectionMode = config.textInjectionMode
+        sc.port = config.port
+        sc.discoveryHostId = config.discoveryHostId
+        sc.discoveryPort = config.discoveryPort
+        sc.lanSharedSecret = config.lanSharedSecret
+        sc.deepSeekApiKey = config.deepSeekApiKey
+        sc.deepSeekModel = config.deepSeekModel
+        sc.deepSeekBaseUrl = config.deepSeekBaseUrl
+        sc.openaiApiKey = config.openaiApiKey
+        sc.openaiModel = config.openaiModel
+        sc.volcengineAppKey = config.volcengineAppKey
+        sc.volcengineAccessKey = config.volcengineAccessKey
+        sc.whisperCppModelPath = config.whisperCppModelPath
+        sc.whisperCppLanguage = config.whisperCppLanguage
+        sc.whisperCppThreads = Int(config.whisperCppThreads) ?? 4
+        sc.whisperCppCommand = config.whisperCppCommand
+        sc.whisperCppExtraArgs = config.whisperCppExtraArgs
+        sc.qwenAsrApiKey = config.qwenAsrApiKey
+        sc.qwenAsrModel = config.qwenAsrModel
+        sc.qwenAsrLanguage = config.qwenAsrLanguage
+        sc.qwenAsrSampleRate = Int(config.qwenAsrSampleRate) ?? 16000
+        sc.qwenAsrRealtimeBaseUrl = config.qwenAsrRealtimeBaseUrl
+        sc.qwenAsrPrompt = config.qwenAsrPrompt
+        sc.claudeCommand = config.claudeCommand
+        sc.claudeCwd = config.claudeCwd
+        sc.claudeMaxTurns = config.claudeMaxTurns
+        sc.claudeDangerouslySkipPermissions = config.claudeDangerouslySkipPermissions
+        sc.codexCommand = config.codexCommand
+        sc.codexCwd = config.codexCwd
+        sc.codexSkipGitRepoCheck = config.codexSkipGitRepoCheck
+        sc.mockTranscript = config.mockTranscript
+        sc.remindersSyncEnabled = config.remindersSyncEnabled
+        sc.remindersListName = config.remindersListName
+        sc.remindersPollSec = config.remindersPollSec
+        sc.displayTodoRefreshMs = config.displayTodoRefreshMs
+        sc.displayCodingRefreshMs = config.displayCodingRefreshMs
+        sc.displayStyle = config.displayStyle
+        return sc
     }
+
+    // MARK: - Lifecycle
 
     func bootstrap() async {
         await refreshEnvironment()
-        await refreshRuntime()
+        if serviceRunning {
+            await refreshRuntime()
+        }
     }
 
     func startService() async {
-        await bridge.start(config: config)
-        await refreshRuntime()
+        do {
+            let sc = makeServerConfig()
+            let server = NativeServer(config: sc)
+            nativeServer = server
+
+            // Wire all NativeServer callbacks directly (replaces old WebSocketClient loopback)
+            server.onStatusChange = { [weak self] status, message in
+                Task { @MainActor in
+                    self?.inlineStatus = message
+                    self?.serviceRunning = (status == .running)
+                }
+            }
+            server.onTranscript = { [weak self] text in
+                Task { @MainActor in self?.liveActivity.lastTranscript = text }
+            }
+            server.onCliSummary = { [weak self] userText, assistantText in
+                Task { @MainActor in
+                    self?.liveActivity.lastUserText = userText
+                    self?.liveActivity.lastAssistantText = assistantText
+                }
+            }
+            server.onCliStateChange = { [weak self] json in
+                Task { @MainActor in
+                    if let statusLine = json["statusLine"] as? String {
+                        self?.liveActivity.cliStatus = statusLine
+                    }
+                }
+            }
+            server.onCliLogTail = { [weak self] lines in
+                Task { @MainActor in self?.liveActivity.cliLogLines = lines }
+            }
+            server.onServiceLog = { [weak self] lines in
+                Task { @MainActor in self?.liveActivity.serviceLogLines = lines }
+            }
+            server.onDeviceEvent = { [weak self] event, deviceId, boardType in
+                Task { @MainActor in
+                    await self?.refreshRuntime()
+                    if event == "disconnected" {
+                        let content = UNMutableNotificationContent()
+                        content.title = "设备断开"
+                        content.body = "设备 \(deviceId) 已断开连接"
+                        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+                        try? await UNUserNotificationCenter.current().add(request)
+                    }
+                }
+            }
+            server.onTodoStateChange = { [weak self] json in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if let items = json["items"] as? [[String: Any]],
+                       let data = try? JSONSerialization.data(withJSONObject: items),
+                       let decoded = try? JSONDecoder().decode([TodoItem].self, from: data) {
+                        self.todos = decoded
+                    }
+                    if let archiveItems = json["archiveItems"] as? [[String: Any]],
+                       let data = try? JSONSerialization.data(withJSONObject: archiveItems),
+                       let decoded = try? JSONDecoder().decode([TodoItem].self, from: data) {
+                        self.archivedTodos = decoded
+                    }
+                }
+            }
+
+            try await server.start()
+            serviceRunning = true
+            inlineStatus = "原生服务运行中 (port \(sc.port))"
+            await refreshRuntime()
+        } catch {
+            print("[AppState] startService error: \(error)")
+            inlineStatus = "启动失败：\(error.localizedDescription)"
+            serviceRunning = false
+        }
     }
 
     func stopService() async {
-        await bridge.stop()
+        await nativeServer?.stop()
+        nativeServer = nil
+        serviceRunning = false
+        inlineStatus = "服务已停止"
     }
 
     func restartService() async {
-        await bridge.restart(config: config)
-        await refreshRuntime()
+        await stopService()
+        await startService()
+    }
+
+    func toggleService() async {
+        if serviceRunning {
+            await stopService()
+        } else {
+            await startService()
+        }
     }
 
     func saveSettings(restart: Bool = true) async {
@@ -54,7 +187,7 @@ final class AppState: ObservableObject {
             try settingsStore.saveDesktopSettings(desktopSettings)
             syncLoginItem()
             inlineStatus = restart ? "已保存；后台服务会重启，通常几秒内生效" : "已保存"
-            if restart, bridge.snapshot.status == .running {
+            if restart, serviceRunning {
                 await restartService()
             }
             await refreshEnvironment()
@@ -99,7 +232,7 @@ final class AppState: ObservableObject {
     }
 
     func openConfigFolder() {
-        bridge.openConfigFolder()
+        NSWorkspace.shared.open(settingsStore.configDirectory)
     }
 
     func chooseDirectory(for target: SendTarget) {
@@ -121,81 +254,149 @@ final class AppState: ObservableObject {
     }
 
     func refreshRuntime() async {
-        await bridge.refreshHealth(config: config)
-        guard bridge.snapshot.status == .running else { return }
-        do {
-            async let nextDevices = admin.getDevices()
-            async let nextStatus = admin.getServiceStatus()
-            async let nextTodos = admin.getTodos()
-            async let nextSync = admin.syncStatus()
-            devices = try await nextDevices
-            serviceStatus = try await nextStatus
-            let snapshot = try await nextTodos
-            todos = snapshot.items
-            archivedTodos = snapshot.archiveItems
-            syncStatus = try await nextSync.status
-        } catch {
-            inlineStatus = "刷新失败：\(error.localizedDescription)"
+        guard let server = nativeServer, serviceRunning else { return }
+
+        let devices = await server.getDevices()
+        let status = await server.getServiceStatus()
+        let todoSnap = await server.getTodoSnapshot()
+        let syncStatusRaw = await server.getSyncStatus()
+        let dc = await server.getDisplayConfig()
+
+        self.devices = devices.map { dict in
+            DeviceInfo(
+                deviceId: dict["deviceId"] as? String ?? "unknown",
+                boardType: dict["boardType"] as? String,
+                voiceMode: dict["voiceMode"] as? String,
+                remoteAddress: dict["remoteAddress"] as? String,
+                connectedAt: dict["connectedAt"] as? Double
+            )
         }
+        self.serviceStatus = ServiceStatusPayload(
+            ok: status["ok"] as? Bool ?? false,
+            clientCount: status["clientCount"] as? Int,
+            sttProvider: status["sttProvider"] as? String,
+            sendTarget: status["sendTarget"] as? String,
+            discoveryEnabled: status["discoveryEnabled"] as? Bool,
+            port: status["port"] as? Int
+        )
+        applyTodoSnapshot(todoSnap)
+        self.displayConfig = dc
+        self.syncStatus = ReminderSyncStatus(
+            enabled: syncStatusRaw["enabled"] as? Bool,
+            lastSyncAt: syncStatusRaw["lastSyncAt"] as? Double,
+            syncCount: syncStatusRaw["syncCount"] as? Int,
+            lastError: syncStatusRaw["lastError"] as? String,
+            list: syncStatusRaw["list"] as? String,
+            pollSec: syncStatusRaw["pollSec"] as? Int
+        )
     }
 
     func discoverDevices() async {
-        do {
-            try await admin.discover()
-            inlineStatus = "已发送发现请求"
-            try? await Task.sleep(for: .seconds(2))
-            await refreshRuntime()
-        } catch {
-            inlineStatus = "发现失败：\(error.localizedDescription)"
-        }
+        nativeServer?.triggerDiscovery(config: makeServerConfig())
+        inlineStatus = "已发送发现请求"
+        try? await Task.sleep(for: .seconds(2))
+        await refreshRuntime()
     }
 
-    func addTodo(_ title: String) async {
+    // MARK: - Todo
+
+    func addTodo(_ title: String, dueAt: String? = nil) async {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             inlineStatus = "请输入待办内容"
             return
         }
-        do {
-            try await admin.createTodo(title: trimmed)
-            inlineStatus = "待办已添加，设备会在下一次刷新周期更新"
-            await refreshRuntime()
-        } catch {
-            inlineStatus = "添加失败：\(error.localizedDescription)"
-        }
+        guard let server = nativeServer else { return }
+        let snapshot = await server.createTodo(title: trimmed, dueAt: dueAt)
+        applyTodoSnapshot(snapshot)
+        inlineStatus = "待办已添加"
     }
 
     func setTodo(_ item: TodoItem, completed: Bool) async {
-        do {
-            try await admin.updateTodo(id: item.id, completed: completed)
-            inlineStatus = completed ? "待办已完成" : "待办已恢复"
-            await refreshRuntime()
-        } catch {
-            inlineStatus = "更新失败：\(error.localizedDescription)"
-        }
+        guard let server = nativeServer else { return }
+        let snapshot = await server.updateTodo(id: item.id, index: nil, title: nil, dueAt: nil, completed: completed)
+        applyTodoSnapshot(snapshot)
+        inlineStatus = completed ? "待办已完成" : "待办已恢复"
+    }
+
+    func editTodo(_ item: TodoItem, title: String, dueAt: String?) async {
+        guard let server = nativeServer else { return }
+        let snapshot = await server.updateTodo(id: item.id, index: nil, title: title, dueAt: dueAt, completed: nil)
+        applyTodoSnapshot(snapshot)
+        inlineStatus = "待办已更新"
     }
 
     func deleteTodo(_ item: TodoItem) async {
-        do {
-            try await admin.deleteTodo(id: item.id)
-            inlineStatus = "待办已删除；如已同步提醒事项，会尝试同步删除"
-            await refreshRuntime()
-        } catch {
-            inlineStatus = "删除失败：\(error.localizedDescription)"
-        }
+        guard let server = nativeServer else { return }
+        let snapshot = await server.deleteTodo(id: item.id, index: nil)
+        applyTodoSnapshot(snapshot)
+        inlineStatus = "待办已删除"
     }
+
+    private func applyTodoSnapshot(_ snapshot: TodoSnapshot) {
+        todos = snapshot.items
+        archivedTodos = snapshot.archiveItems
+    }
+
+    // MARK: - Reminder Sync
 
     func runReminderSync() async {
-        do {
-            try await admin.runSyncNow()
-            inlineStatus = "提醒同步已执行"
-            await refreshRuntime()
-        } catch {
-            inlineStatus = "同步失败：\(error.localizedDescription)"
+        await nativeServer?.runSyncNow()
+        inlineStatus = "提醒同步已执行"
+        await refreshRuntime()
+    }
+
+    func fetchSyncLists() async {
+        guard let server = nativeServer else { return }
+        reminderLists = await server.getReminderLists()
+    }
+
+    func saveSyncConfig(enabled: Bool, remindctlPath: String, list: String, pollSec: Int) async {
+        config.remindersSyncEnabled = enabled
+        config.remindersListName = list
+        config.remindersPollSec = pollSec
+        try? settingsStore.saveConfig(config)
+        inlineStatus = "同步配置已保存（重启服务后生效）"
+    }
+
+    // MARK: - Display Config
+
+    func fetchDisplayConfig() async {
+        guard let server = nativeServer else { return }
+        displayConfig = await server.getDisplayConfig()
+    }
+
+    func saveDisplayConfig() async {
+        await nativeServer?.updateDisplayConfig(displayConfig)
+        config.displayTodoRefreshMs = displayConfig.todoRefreshMs
+        config.displayCodingRefreshMs = displayConfig.codingRefreshMs
+        config.displayStyle = displayConfig.style
+        try? settingsStore.saveConfig(config)
+        inlineStatus = "显示配置已保存"
+        await refreshRuntime()
+    }
+
+    // MARK: - Server Restart
+
+    func restartServer() async {
+        inlineStatus = "服务正在重启..."
+        await restartService()
+    }
+
+    // MARK: - Login Item (Auto-Launch)
+
+    private func syncLoginItem() {
+        if #available(macOS 13.0, *) {
+            do {
+                if desktopSettings.autoLaunch {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                print("[LoginItem] \(error.localizedDescription)")
+            }
         }
     }
 
-    private func syncLoginItem() {
-        // ServiceManagement migration will replace this placeholder in phase 2.
-    }
 }

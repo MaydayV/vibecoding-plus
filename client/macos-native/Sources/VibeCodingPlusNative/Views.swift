@@ -2,10 +2,12 @@ import SwiftUI
 
 enum SidebarTab: String, CaseIterable, Identifiable {
     case overview
-    case environment
-    case settings
     case devices
     case todo
+    case reminders
+    case display
+    case environment
+    case settings
     case logs
 
     var id: String { rawValue }
@@ -13,10 +15,12 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .overview: "概览"
-        case .environment: "环境"
-        case .settings: "设置"
         case .devices: "设备"
         case .todo: "待办"
+        case .reminders: "提醒"
+        case .display: "显示"
+        case .environment: "环境"
+        case .settings: "设置"
         case .logs: "日志"
         }
     }
@@ -24,10 +28,12 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .overview: "speedometer"
-        case .environment: "checklist.checked"
-        case .settings: "gearshape"
         case .devices: "display.2"
         case .todo: "checklist"
+        case .reminders: "bell.badge"
+        case .display: "paintbrush"
+        case .environment: "checklist.checked"
+        case .settings: "gearshape"
         case .logs: "doc.text.magnifyingglass"
         }
     }
@@ -56,12 +62,12 @@ struct RootView: View {
                         .glassButton()
                     Button("启动") { Task { await state.startService() } }
                         .glassProminentButton()
-                        .disabled(state.bridge.snapshot.status == .running || state.bridge.snapshot.status == .starting)
+                        .disabled(state.serviceRunning)
                     Button("重启") { Task { await state.restartService() } }
                         .glassButton()
                     Button("停止") { Task { await state.stopService() } }
                         .glassButton()
-                        .disabled(state.bridge.snapshot.status == .stopped)
+                        .disabled(!state.serviceRunning)
                 }
             }
         }
@@ -72,19 +78,25 @@ struct RootView: View {
         switch selection ?? .overview {
         case .overview:
             OverviewView()
-        case .environment:
-            EnvironmentView()
-        case .settings:
-            SettingsView()
         case .devices:
             DevicesView()
         case .todo:
             TodoView()
+        case .reminders:
+            RemindersView()
+        case .display:
+            DisplayConfigView()
+        case .environment:
+            EnvironmentView()
+        case .settings:
+            SettingsView()
         case .logs:
             LogsView()
         }
     }
 }
+
+// MARK: - Overview with Live Activity
 
 struct OverviewView: View {
     @EnvironmentObject private var state: AppState
@@ -93,17 +105,32 @@ struct OverviewView: View {
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(title: "概览", subtitle: state.inlineStatus)
             HStack(spacing: 12) {
-                MetricView(title: "服务", value: state.bridge.snapshot.status.label, detail: state.bridge.snapshot.message)
+                MetricView(title: "服务", value: (state.serviceRunning ? "运行中" : "已停止"), detail: state.inlineStatus)
                 MetricView(title: "模式", value: state.config.sendTarget.label, detail: "端口 \(state.config.port)")
                 MetricView(title: "设备", value: "\(state.devices.count)", detail: state.serviceStatus?.discoveryEnabled == true ? "发现服务已启用" : "发现服务未启用")
-                MetricView(title: "STT", value: state.config.sttProvider.label, detail: state.serviceStatus?.nodeVersion ?? "--")
+                MetricView(title: "STT", value: state.config.sttProvider.label, detail: state.serviceStatus?.sttProvider ?? "--")
             }
             .frame(maxWidth: .infinity)
 
             GlassPanel {
                 VStack(alignment: .leading, spacing: 10) {
+                    Text("实时活动").font(.headline)
+                    HStack(spacing: 12) {
+                        LiveField(label: "最后语音识别", value: state.liveActivity.lastTranscript)
+                        LiveField(label: "最后用户文本", value: state.liveActivity.lastUserText)
+                        LiveField(label: "最后 AI 回复", value: state.liveActivity.lastAssistantText)
+                    }
+                    if !state.liveActivity.cliStatus.isEmpty {
+                        Text("CLI 状态：\(state.liveActivity.cliStatus)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            GlassPanel {
+                VStack(alignment: .leading, spacing: 10) {
                     Text("近期日志").font(.headline)
-                    LogText(lines: Array(state.bridge.snapshot.logs.suffix(12)))
+                    LogText(lines: Array(state.liveActivity.cliLogLines.suffix(12)))
                 }
             }
 
@@ -111,6 +138,25 @@ struct OverviewView: View {
         }
     }
 }
+
+struct LiveField: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value.isEmpty ? "--" : value)
+                .font(.callout)
+                .lineLimit(3)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Environment
 
 struct EnvironmentView: View {
     @EnvironmentObject private var state: AppState
@@ -186,6 +232,8 @@ struct EnvironmentRow: View {
         }
     }
 }
+
+// MARK: - Settings
 
 struct SettingsView: View {
     @EnvironmentObject private var state: AppState
@@ -271,6 +319,8 @@ struct SettingsView: View {
     }
 }
 
+// MARK: - Devices
+
 struct DevicesView: View {
     @EnvironmentObject private var state: AppState
 
@@ -295,9 +345,12 @@ struct DevicesView: View {
     }
 }
 
+// MARK: - Todo (enhanced with date picker & edit)
+
 struct TodoView: View {
     @EnvironmentObject private var state: AppState
     @State private var title = ""
+    @State private var dueDate: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -306,6 +359,16 @@ struct TodoView: View {
                 TextField("新增待办", text: $title)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { add() }
+                DatePicker("截止日期", selection: Binding(
+                    get: { dueDate ?? Date() },
+                    set: { dueDate = $0 }
+                ), displayedComponents: .date)
+                .labelsHidden()
+                .opacity(dueDate == nil ? 0.6 : 1)
+                Button(dueDate == nil ? "📅" : "✕") {
+                    dueDate = dueDate == nil ? Date() : nil
+                }
+                .glassButton()
                 Button("添加") { add() }.glassProminentButton()
                 Button("同步提醒") { Task { await state.runReminderSync() } }.glassButton()
             }
@@ -317,7 +380,7 @@ struct TodoView: View {
                 }
                 Section("归档") {
                     ForEach(state.archivedTodos) { item in
-                        TodoRow(item: item)
+                        TodoRow(item: item, archived: true)
                     }
                 }
             }
@@ -328,45 +391,322 @@ struct TodoView: View {
     private func add() {
         let value = title
         title = ""
-        Task { await state.addTodo(value) }
+        let dueISO = dueDate.map { ISO8601DateFormatter().string(from: $0) }
+        dueDate = nil
+        Task { await state.addTodo(value, dueAt: dueISO) }
     }
 }
 
 struct TodoRow: View {
     @EnvironmentObject private var state: AppState
     let item: TodoItem
+    var archived: Bool = false
+    @State private var isEditing = false
+    @State private var editTitle = ""
 
     var body: some View {
         HStack {
-            Button {
-                Task { await state.setTodo(item, completed: !item.completed) }
-            } label: {
-                Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
+            if !archived {
+                Button {
+                    Task { await state.setTodo(item, completed: !item.completed) }
+                } label: {
+                    Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            Text(item.title)
-                .strikethrough(item.completed)
-            if item.appleId != nil {
-                Text("提醒").font(.caption).foregroundStyle(.secondary)
+
+            if isEditing {
+                TextField("", text: $editTitle)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { saveEdit() }
+                Button("保存") { saveEdit() }.glassProminentButton()
+                Button("取消") { isEditing = false }.glassButton()
+            } else {
+                Text(item.title)
+                    .strikethrough(item.completed)
+                if let dueAt = item.dueAt, !dueAt.isEmpty {
+                    Text(formatDueDate(dueAt))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if item.appleId != nil {
+                    Text("提醒").font(.caption).foregroundStyle(.secondary)
+                }
             }
+
             Spacer()
+
+            if !isEditing && !archived {
+                Button("编辑") {
+                    editTitle = item.title
+                    isEditing = true
+                }
+                .glassButton()
+            }
             Button("删除") { Task { await state.deleteTodo(item) } }
                 .glassButton()
         }
     }
+
+    private func saveEdit() {
+        isEditing = false
+        let trimmed = editTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != item.title else { return }
+        Task { await state.editTodo(item, title: trimmed, dueAt: item.dueAt) }
+    }
+
+    private func formatDueDate(_ iso: String) -> String {
+        guard let date = ISO8601DateFormatter().date(from: iso) else { return iso }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd"
+        return formatter.string(from: date)
+    }
 }
 
-struct LogsView: View {
+// MARK: - Reminders Sync
+
+struct RemindersView: View {
+    @EnvironmentObject private var state: AppState
+    @State private var syncEnabled = false
+    @State private var remindctlPath = "remindctl"
+    @State private var selectedList = ""
+    @State private var pollSec = 15
+    @State private var listsLoaded = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                PageHeader(title: "提醒事项同步", subtitle: state.inlineStatus)
+
+                HStack {
+                    Button("立即同步") { Task { await state.runReminderSync() } }
+                        .glassProminentButton()
+                    Button("加载列表") { Task { await state.fetchSyncLists(); listsLoaded = true } }
+                        .glassButton()
+                    Button("刷新状态") { Task { await state.refreshRuntime() } }
+                        .glassButton()
+                    Spacer()
+                }
+
+                // Sync status
+                GlassPanel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("同步状态").font(.headline)
+                        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                            GridRow {
+                                Text("状态")
+                                Text(state.syncStatus?.enabled == true ? "已启用" : "未启用")
+                                    .foregroundStyle(state.syncStatus?.enabled == true ? .green : .secondary)
+                            }
+                            if let count = state.syncStatus?.syncCount {
+                                GridRow { Text("同步次数"); Text("\(count)") }
+                            }
+                            if let lastSync = state.syncStatus?.lastSyncAt, lastSync > 0 {
+                                GridRow { Text("上次同步"); Text(formatTimestamp(lastSync)) }
+                            }
+                            if let error = state.syncStatus?.lastError, !error.isEmpty {
+                                GridRow { Text("最近错误"); Text(error).foregroundStyle(.red) }
+                            }
+                        }
+                    }
+                }
+
+                // Sync config
+                GlassPanel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("同步配置").font(.headline)
+                        Toggle("启用提醒事项同步", isOn: $syncEnabled)
+                        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                            GridRow { Text("remindctl 路径"); TextField("remindctl", text: $remindctlPath) }
+                            GridRow { Text("轮询间隔（秒）"); TextField("15", value: $pollSec, format: .number) }
+                        }
+                        if listsLoaded && !state.reminderLists.isEmpty {
+                            Text("提醒事项列表").font(.callout.weight(.medium))
+                            ForEach(state.reminderLists) { list in
+                                HStack {
+                                    Button {
+                                        selectedList = list.id
+                                    } label: {
+                                        HStack {
+                                            Image(systemName: selectedList == list.id ? "checkmark.circle.fill" : "circle")
+                                            Text(list.title)
+                                            Text("(\(list.reminderCount))").foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    Spacer()
+                                }
+                            }
+                        }
+                        HStack {
+                            Button("保存配置") {
+                                Task {
+                                    await state.saveSyncConfig(
+                                        enabled: syncEnabled,
+                                        remindctlPath: remindctlPath,
+                                        list: selectedList,
+                                        pollSec: pollSec
+                                    )
+                                }
+                            }
+                            .glassProminentButton()
+                            Spacer()
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            syncEnabled = state.syncStatus?.enabled ?? false
+            remindctlPath = state.syncStatus?.remindctlPath ?? "remindctl"
+            selectedList = state.syncStatus?.list ?? ""
+            pollSec = state.syncStatus?.pollSec ?? 15
+        }
+    }
+
+    private func formatTimestamp(_ ts: Double) -> String {
+        let date = Date(timeIntervalSince1970: ts / 1000)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Display Config
+
+struct DisplayConfigView: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            PageHeader(title: "日志", subtitle: state.bridge.snapshot.message)
-            LogText(lines: state.bridge.snapshot.logs)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                PageHeader(title: "墨水屏显示配置", subtitle: state.inlineStatus)
+
+                GlassPanel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("刷新间隔").font(.headline)
+
+                        HStack {
+                            Text("Todo 刷新间隔")
+                            Slider(value: Binding(
+                                get: { Double(state.displayConfig.todoRefreshMs) },
+                                set: { state.displayConfig.todoRefreshMs = Int($0) }
+                            ), in: 200...10000, step: 100)
+                            Text("\(state.displayConfig.todoRefreshMs) ms")
+                                .font(.caption.monospaced())
+                                .frame(width: 70)
+                        }
+
+                        HStack {
+                            Text("Coding 刷新间隔")
+                            Slider(value: Binding(
+                                get: { Double(state.displayConfig.codingRefreshMs) },
+                                set: { state.displayConfig.codingRefreshMs = Int($0) }
+                            ), in: 200...10000, step: 100)
+                            Text("\(state.displayConfig.codingRefreshMs) ms")
+                                .font(.caption.monospaced())
+                                .frame(width: 70)
+                        }
+                    }
+                }
+
+                GlassPanel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("显示风格").font(.headline)
+                        Picker("", selection: Binding(
+                            get: { state.displayConfig.style },
+                            set: { state.displayConfig.style = $0 }
+                        )) {
+                            Text("亮色").tag("light")
+                            Text("暗色").tag("dark")
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 300)
+                    }
+                }
+
+                HStack {
+                    Button("保存显示配置") { Task { await state.saveDisplayConfig() } }
+                        .glassProminentButton()
+                    Spacer()
+                    Text("修改后设备会在下一次刷新周期生效")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .onAppear {
+            Task { await state.fetchDisplayConfig() }
         }
     }
 }
+
+// MARK: - Logs (enhanced: dual-column with filters)
+
+struct LogsView: View {
+    @EnvironmentObject private var state: AppState
+    @State private var cliFilter: LogFilter = .all
+    @State private var svcFilter: ServiceLogFilter = .all
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            PageHeader(title: "日志", subtitle: state.inlineStatus)
+            HStack(spacing: 16) {
+                // CLI Events
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("CLI 事件").font(.headline)
+                        Spacer()
+                        Picker("", selection: $cliFilter) {
+                            ForEach(LogFilter.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 240)
+                    }
+                    LogText(lines: filteredCliLines)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+
+                // Service Log
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("服务日志").font(.headline)
+                        Spacer()
+                        Picker("", selection: $svcFilter) {
+                            ForEach(ServiceLogFilter.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 200)
+                    }
+                    LogText(lines: filteredServiceLines)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var filteredCliLines: [String] {
+        let lines = state.liveActivity.cliLogLines
+        switch cliFilter {
+        case .all: return lines
+        case .transcript: return lines.filter { $0.localizedCaseInsensitiveContains("transcript") || $0.localizedCaseInsensitiveContains("语音") }
+        case .user: return lines.filter { $0.localizedCaseInsensitiveContains("user") || $0.localizedCaseInsensitiveContains("用户") }
+        case .assistant: return lines.filter { $0.localizedCaseInsensitiveContains("assistant") || $0.localizedCaseInsensitiveContains("AI") || $0.localizedCaseInsensitiveContains("claude") || $0.localizedCaseInsensitiveContains("codex") }
+        }
+    }
+
+    private var filteredServiceLines: [String] {
+        let lines = state.liveActivity.serviceLogLines
+        switch svcFilter {
+        case .all: return lines
+        case .device: return lines.filter { $0.localizedCaseInsensitiveContains("设备") || $0.localizedCaseInsensitiveContains("device") }
+        case .process: return lines.filter { $0.localizedCaseInsensitiveContains("STT") || $0.localizedCaseInsensitiveContains("服务") || $0.localizedCaseInsensitiveContains("error") }
+        }
+    }
+}
+
+// MARK: - Shared Components
 
 struct PageHeader: View {
     let title: String
