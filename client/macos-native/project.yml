@@ -15,8 +15,7 @@ targets:
     platform: macOS
     sources:
       - path: Sources
-    resources:
-      - path: Resources
+      - path: Resources/Assets.xcassets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mac20777.vibecodingplus

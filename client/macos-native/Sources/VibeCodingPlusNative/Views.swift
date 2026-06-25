@@ -27,14 +27,14 @@ enum SidebarTab: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
-        case .overview: "speedometer"
+        case .overview: "rectangle.grid.2x2"
         case .devices: "display.2"
         case .todo: "checklist"
         case .reminders: "bell.badge"
-        case .display: "paintbrush"
-        case .environment: "checklist.checked"
-        case .settings: "gearshape"
-        case .logs: "doc.text.magnifyingglass"
+        case .display: "rectangle.on.rectangle"
+        case .environment: "checkmark.shield"
+        case .settings: "slider.horizontal.3"
+        case .logs: "terminal"
         }
     }
 }
@@ -45,30 +45,82 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarTab.allCases, selection: $selection) { item in
-                Label(item.label, systemImage: item.symbol)
-                    .tag(item)
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 210)
+            sidebar
+                .navigationSplitViewColumnWidth(min: 196, ideal: 220)
         } detail: {
             ZStack {
-                GlassBackground()
-                content
-                    .padding(20)
+                InkBackground()
+                ScrollView {
+                    content
+                        .padding(24)
+                        .frame(maxWidth: 1180, alignment: .topLeading)
+                }
             }
             .toolbar {
                 ToolbarItemGroup {
                     Button("刷新") { Task { await state.refreshRuntime(); await state.refreshEnvironment() } }
-                        .glassButton()
-                    Button("启动") { Task { await state.startService() } }
-                        .glassProminentButton()
+                        .inkToolbarButton()
+                    Button(state.serviceRunning ? "运行中" : "启动") { Task { await state.startService() } }
+                        .inkToolbarProminentButton()
                         .disabled(state.serviceRunning)
                     Button("重启") { Task { await state.restartService() } }
-                        .glassButton()
+                        .inkToolbarButton()
                     Button("停止") { Task { await state.stopService() } }
-                        .glassButton()
+                        .inkToolbarButton()
                         .disabled(!state.serviceRunning)
                 }
+            }
+        }
+        .tint(.primary)
+    }
+
+    private var sidebar: some View {
+        ZStack {
+            Color(nsColor: .controlBackgroundColor)
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("VibeCoding")
+                        .font(.title3.weight(.bold))
+                    Text(state.serviceRunning ? "原生服务运行中" : "服务未启动")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 18)
+
+                VStack(spacing: 6) {
+                    ForEach(SidebarTab.allCases) { item in
+                        Button {
+                            selection = item
+                        } label: {
+                            HStack(spacing: 9) {
+                                Image(systemName: item.symbol)
+                                    .frame(width: 18)
+                                Text(item.label)
+                                Spacer()
+                            }
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, 10)
+                            .frame(height: 34)
+                            .foregroundStyle(selection == item ? Color(nsColor: .textBackgroundColor) : .primary)
+                            .background(selection == item ? Color.primary : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(selection == item ? Color.clear : Color.primary.opacity(0.08), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+
+                InkStatusPill(
+                    title: state.serviceRunning ? "ONLINE" : "OFFLINE",
+                    detail: state.inlineStatus.isEmpty ? "等待操作" : state.inlineStatus,
+                    active: state.serviceRunning
+                )
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
             }
         }
     }
@@ -96,45 +148,51 @@ struct RootView: View {
     }
 }
 
-// MARK: - Overview with Live Activity
+// MARK: - Overview
 
 struct OverviewView: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            PageHeader(title: "概览", subtitle: state.inlineStatus)
-            HStack(spacing: 12) {
-                MetricView(title: "服务", value: (state.serviceRunning ? "运行中" : "已停止"), detail: state.inlineStatus)
-                MetricView(title: "模式", value: state.config.sendTarget.label, detail: "端口 \(state.config.port)")
-                MetricView(title: "设备", value: "\(state.devices.count)", detail: state.serviceStatus?.discoveryEnabled == true ? "发现服务已启用" : "发现服务未启用")
-                MetricView(title: "STT", value: state.config.sttProvider.label, detail: state.serviceStatus?.sttProvider ?? "--")
-            }
-            .frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(
+                eyebrow: "LOCAL CLIENT",
+                title: "运行概览",
+                subtitle: state.inlineStatus
+            )
 
-            GlassPanel {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("实时活动").font(.headline)
-                    HStack(spacing: 12) {
-                        LiveField(label: "最后语音识别", value: state.liveActivity.lastTranscript)
-                        LiveField(label: "最后用户文本", value: state.liveActivity.lastUserText)
-                        LiveField(label: "最后 AI 回复", value: state.liveActivity.lastAssistantText)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
+                MetricView(title: "服务", value: state.serviceRunning ? "运行中" : "已停止", detail: "TCP \(state.config.port) / UDP \(state.config.discoveryPort)", symbol: "power")
+                MetricView(title: "设备", value: "\(state.devices.count)", detail: state.serviceStatus?.discoveryEnabled == true ? "发现已启用" : "发现未启用", symbol: "display")
+                MetricView(title: "模式", value: state.config.sendTarget.label, detail: state.config.transcriptDeliveryMode, symbol: "command")
+                MetricView(title: "语音", value: state.config.sttProvider.label, detail: state.serviceStatus?.sttProvider ?? "未启动", symbol: "waveform")
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14)], spacing: 14) {
+                InkPanel(title: "实时活动", symbol: "dot.radiowaves.left.and.right") {
+                    VStack(spacing: 10) {
+                        LiveField(label: "语音识别", value: state.liveActivity.lastTranscript)
+                        Divider()
+                        LiveField(label: "用户文本", value: state.liveActivity.lastUserText)
+                        Divider()
+                        LiveField(label: "AI 回复", value: state.liveActivity.lastAssistantText)
                     }
-                    if !state.liveActivity.cliStatus.isEmpty {
-                        Text("CLI 状态：\(state.liveActivity.cliStatus)")
-                            .font(.caption).foregroundStyle(.secondary)
+                }
+
+                InkPanel(title: "服务状态", symbol: "server.rack") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        InfoRow("Host ID", state.config.discoveryHostId)
+                        InfoRow("端口", "\(state.config.port)")
+                        InfoRow("发现端口", "\(state.config.discoveryPort)")
+                        InfoRow("CLI", state.liveActivity.cliStatus.isEmpty ? "--" : state.liveActivity.cliStatus)
                     }
                 }
             }
 
-            GlassPanel {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("近期日志").font(.headline)
-                    LogText(lines: Array(state.liveActivity.cliLogLines.suffix(12)))
-                }
+            InkPanel(title: "近期日志", symbol: "text.alignleft") {
+                LogText(lines: Array((state.liveActivity.serviceLogLines.isEmpty ? state.liveActivity.cliLogLines : state.liveActivity.serviceLogLines).suffix(14)))
+                    .frame(minHeight: 180)
             }
-
-            Spacer()
         }
     }
 }
@@ -144,15 +202,16 @@ struct LiveField: View {
     let value: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
             Text(value.isEmpty ? "--" : value)
                 .font(.callout)
                 .lineLimit(3)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -161,38 +220,44 @@ struct LiveField: View {
 struct EnvironmentView: View {
     @EnvironmentObject private var state: AppState
 
+    private var missingChecks: [EnvironmentCheck] {
+        state.environmentReport?.checks.filter { $0.status == "missing" } ?? []
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            PageHeader(title: "环境", subtitle: state.inlineStatus)
-            HStack {
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(
+                eyebrow: "SETUP",
+                title: "环境检测",
+                subtitle: state.environmentReport?.ok == true ? "环境通过" : "请处理缺失项"
+            )
+
+            HStack(spacing: 10) {
                 Button("重新检测") { Task { await state.refreshEnvironment() } }
-                    .glassButton()
+                    .inkButton()
                 Button("安装缺失项") {
                     Task {
-                        for item in state.environmentReport?.checks.filter({ $0.status == "missing" && $0.installable }) ?? [] {
+                        for item in missingChecks where item.installable {
                             await state.install(toolId: item.id)
                         }
                     }
                 }
-                .glassProminentButton()
-                .disabled(state.isBusy)
+                .inkProminentButton()
+                .disabled(state.isBusy || missingChecks.allSatisfy { !$0.installable })
                 Spacer()
-                Text(state.environmentReport?.ok == true ? "环境通过" : "需要处理")
-                    .font(.callout.weight(.semibold))
+                StatusBadge(text: state.environmentReport?.ok == true ? "READY" : "\(missingChecks.count) MISSING", active: state.environmentReport?.ok == true)
             }
 
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(state.environmentReport?.checks ?? []) { item in
-                        EnvironmentRow(item: item)
-                    }
+            LazyVStack(spacing: 10) {
+                ForEach(state.environmentReport?.checks ?? []) { item in
+                    EnvironmentRow(item: item)
                 }
             }
 
             if !state.installLog.isEmpty {
-                GlassPanel {
+                InkPanel(title: "安装输出", symbol: "terminal") {
                     LogText(lines: state.installLog.split(whereSeparator: \.isNewline).map(String.init))
-                        .frame(maxHeight: 160)
+                        .frame(maxHeight: 180)
                 }
             }
         }
@@ -204,29 +269,53 @@ struct EnvironmentRow: View {
     let item: EnvironmentCheck
 
     var body: some View {
-        GlassPanel {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: item.status == "ok" ? "checkmark.circle.fill" : item.status == "missing" ? "exclamationmark.triangle.fill" : "circle")
-                    .foregroundStyle(item.status == "ok" ? .green : item.status == "missing" ? .orange : .secondary)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.label).font(.headline)
-                    Text(item.purpose).foregroundStyle(.secondary)
-                    if !item.path.isEmpty { Text(item.path).font(.caption.monospaced()).foregroundStyle(.secondary) }
-                    if !item.version.isEmpty { Text(item.version).font(.caption.monospaced()).foregroundStyle(.secondary) }
-                    if !item.note.isEmpty { Text(item.note).font(.caption).foregroundStyle(.secondary) }
+        InkCard {
+            HStack(alignment: .top, spacing: 14) {
+                StatusDot(status: item.status)
+                    .padding(.top, 3)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 8) {
+                        Text(item.label)
+                            .font(.headline)
+                        Text(item.statusLabel)
+                            .font(.caption.weight(.bold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .overlay(Capsule().stroke(.primary.opacity(0.35), lineWidth: 1))
+                    }
+                    Text(item.purpose)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    if !item.path.isEmpty {
+                        Text(item.path)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    if !item.version.isEmpty {
+                        Text(item.version)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    if !item.note.isEmpty {
+                        Text(item.note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Spacer()
-                Text(item.statusLabel).font(.callout.weight(.medium))
-                if item.installable {
-                    Button(item.installLabel) { Task { await state.install(toolId: item.id) } }
-                        .glassProminentButton()
-                        .disabled(state.isBusy)
-                }
-                if item.id == "macos_permissions" {
-                    Button("打开权限") { state.openPermissions() }.glassButton()
-                }
-                if item.id == "codex" || item.id == "claude" {
-                    Button("登录/检查") { state.openToolLogin(item.id) }.glassButton()
+                Spacer(minLength: 20)
+                HStack(spacing: 8) {
+                    if item.installable {
+                        Button(item.installLabel) { Task { await state.install(toolId: item.id) } }
+                            .inkProminentButton()
+                            .disabled(state.isBusy)
+                    }
+                    if item.id == "macos_permissions" {
+                        Button("打开权限") { state.openPermissions() }.inkButton()
+                    }
+                    if item.id == "codex" || item.id == "claude" {
+                        Button("登录/检查") { state.openToolLogin(item.id) }.inkButton()
+                    }
                 }
             }
         }
@@ -239,80 +328,89 @@ struct SettingsView: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                PageHeader(title: "设置", subtitle: state.inlineStatus)
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(eyebrow: "CONFIG", title: "设置", subtitle: state.inlineStatus)
 
-                GlassPanel {
-                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
-                        GridRow {
-                            Text("发送目标")
-                            Picker("", selection: $state.config.sendTarget) {
-                                ForEach(SendTarget.allCases) { Text($0.label).tag($0) }
-                            }.pickerStyle(.segmented)
+            InkPanel(title: "运行模式", symbol: "switch.2") {
+                VStack(spacing: 12) {
+                    InkFormRow("发送目标") {
+                        Picker("", selection: $state.config.sendTarget) {
+                            ForEach(SendTarget.allCases) { Text($0.label).tag($0) }
                         }
-                        GridRow {
-                            Text("语音识别")
-                            Picker("", selection: $state.config.sttProvider) {
-                                ForEach(STTProvider.allCases) { Text($0.label).tag($0) }
-                            }.pickerStyle(.segmented)
+                        .pickerStyle(.segmented)
+                    }
+                    InkFormRow("语音识别") {
+                        Picker("", selection: $state.config.sttProvider) {
+                            ForEach(STTProvider.allCases) { Text($0.label).tag($0) }
                         }
-                        GridRow { Text("LAN Secret"); SecureField("", text: $state.config.lanSharedSecret) }
-                        GridRow { Text("Codex 目录"); PathField(text: $state.config.codexCwd) { state.chooseDirectory(for: .codexExec) } }
-                        GridRow { Text("Claude 目录"); PathField(text: $state.config.claudeCwd) { state.chooseDirectory(for: .claudeCode) } }
+                        .pickerStyle(.segmented)
+                    }
+                    InkFormRow("LAN Secret") {
+                        SecureField("", text: $state.config.lanSharedSecret)
+                            .textFieldStyle(.plain)
+                    }
+                    InkFormRow("Codex 目录") {
+                        PathField(text: $state.config.codexCwd) { state.chooseDirectory(for: .codexExec) }
+                    }
+                    InkFormRow("Claude 目录") {
+                        PathField(text: $state.config.claudeCwd) { state.chooseDirectory(for: .claudeCode) }
                     }
                 }
+            }
 
-                providerSettings
+            providerSettings
 
-                GlassPanel {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle("开机启动", isOn: $state.desktopSettings.autoLaunch)
-                        Toggle("隐藏启动", isOn: $state.desktopSettings.launchToTray)
-                        Toggle("关闭时保留菜单栏运行", isOn: $state.desktopSettings.closeToTray)
-                        Toggle("Codex 跳过 Git 仓库检查", isOn: $state.config.codexSkipGitRepoCheck)
-                        Toggle("Claude 跳过权限确认", isOn: $state.config.claudeDangerouslySkipPermissions)
-                    }
+            InkPanel(title: "应用行为", symbol: "gearshape") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("开机启动", isOn: $state.desktopSettings.autoLaunch)
+                    Toggle("隐藏启动", isOn: $state.desktopSettings.launchToTray)
+                    Toggle("关闭时保留菜单栏运行", isOn: $state.desktopSettings.closeToTray)
+                    Toggle("Codex 跳过 Git 仓库检查", isOn: $state.config.codexSkipGitRepoCheck)
+                    Toggle("Claude 跳过权限确认", isOn: $state.config.claudeDangerouslySkipPermissions)
                 }
+                .toggleStyle(InkCheckboxToggleStyle())
+            }
 
-                HStack {
-                    Button("保存并应用") { Task { await state.saveSettings() } }
-                        .glassProminentButton()
-                    Button("打开配置目录") { state.openConfigFolder() }
-                        .glassButton()
-                    Spacer()
-                    Text(SettingsStore().configURL.path)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                }
+            HStack(spacing: 10) {
+                Button("保存并应用") { Task { await state.saveSettings() } }
+                    .inkProminentButton()
+                Button("打开配置目录") { state.openConfigFolder() }
+                    .inkButton()
+                Spacer()
+                Text(SettingsStore().configURL.path)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
             }
         }
     }
 
     @ViewBuilder
     private var providerSettings: some View {
-        GlassPanel {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+        InkPanel(title: "\(state.config.sttProvider.label) 参数", symbol: "waveform.path.ecg") {
+            VStack(spacing: 12) {
                 switch state.config.sttProvider {
                 case .volcengine:
-                    GridRow { Text("App Key"); TextField("", text: $state.config.volcengineAppKey) }
-                    GridRow { Text("Access Key"); SecureField("", text: $state.config.volcengineAccessKey) }
+                    InkFormRow("App Key") { TextField("", text: $state.config.volcengineAppKey).textFieldStyle(.plain) }
+                    InkFormRow("Access Key") { SecureField("", text: $state.config.volcengineAccessKey).textFieldStyle(.plain) }
                 case .openai:
-                    GridRow { Text("API Key"); SecureField("", text: $state.config.openaiApiKey) }
-                    GridRow { Text("模型"); TextField("", text: $state.config.openaiModel) }
+                    InkFormRow("API Key") { SecureField("", text: $state.config.openaiApiKey).textFieldStyle(.plain) }
+                    InkFormRow("模型") { TextField("", text: $state.config.openaiModel).textFieldStyle(.plain) }
                 case .whisperCpp:
-                    GridRow { Text("模型路径"); TextField("", text: $state.config.whisperCppModelPath) }
-                    GridRow { Text("命令"); TextField("", text: $state.config.whisperCppCommand) }
-                    GridRow { Text("语言"); TextField("", text: $state.config.whisperCppLanguage) }
-                    GridRow { Text("线程"); TextField("", text: $state.config.whisperCppThreads) }
-                    GridRow { Text("额外参数"); TextField("", text: $state.config.whisperCppExtraArgs) }
+                    InkFormRow("模型路径") { TextField("", text: $state.config.whisperCppModelPath).textFieldStyle(.plain) }
+                    InkFormRow("命令") { TextField("", text: $state.config.whisperCppCommand).textFieldStyle(.plain) }
+                    InkFormRow("语言") { TextField("", text: $state.config.whisperCppLanguage).textFieldStyle(.plain) }
+                    InkFormRow("线程") { TextField("", text: $state.config.whisperCppThreads).textFieldStyle(.plain) }
+                    InkFormRow("额外参数") { TextField("", text: $state.config.whisperCppExtraArgs).textFieldStyle(.plain) }
                 case .qwenAsr:
-                    GridRow { Text("API Key"); SecureField("", text: $state.config.qwenAsrApiKey) }
-                    GridRow { Text("模型"); TextField("", text: $state.config.qwenAsrModel) }
-                    GridRow { Text("语言"); TextField("", text: $state.config.qwenAsrLanguage) }
-                    GridRow { Text("采样率"); TextField("", text: $state.config.qwenAsrSampleRate) }
-                    GridRow { Text("Realtime URL"); TextField("", text: $state.config.qwenAsrRealtimeBaseUrl) }
-                    GridRow { Text("提示词"); TextField("", text: $state.config.qwenAsrPrompt) }
+                    InkFormRow("API Key") { SecureField("", text: $state.config.qwenAsrApiKey).textFieldStyle(.plain) }
+                    InkFormRow("模型") { TextField("", text: $state.config.qwenAsrModel).textFieldStyle(.plain) }
+                    InkFormRow("语言") { TextField("", text: $state.config.qwenAsrLanguage).textFieldStyle(.plain) }
+                    InkFormRow("采样率") { TextField("", text: $state.config.qwenAsrSampleRate).textFieldStyle(.plain) }
+                    InkFormRow("Realtime URL") { TextField("", text: $state.config.qwenAsrRealtimeBaseUrl).textFieldStyle(.plain) }
+                    InkFormRow("提示词") { TextField("", text: $state.config.qwenAsrPrompt).textFieldStyle(.plain) }
                 }
             }
         }
@@ -325,27 +423,46 @@ struct DevicesView: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            PageHeader(title: "设备", subtitle: state.inlineStatus)
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(eyebrow: "LAN", title: "设备", subtitle: state.inlineStatus)
             HStack {
-                Button("刷新") { Task { await state.refreshRuntime() } }.glassButton()
-                Button("重新发现") { Task { await state.discoverDevices() } }.glassProminentButton()
+                Button("刷新") { Task { await state.refreshRuntime() } }.inkButton()
+                Button("重新发现") { Task { await state.discoverDevices() } }.inkProminentButton()
                 Spacer()
+                StatusBadge(text: "\(state.devices.count) CONNECTED", active: !state.devices.isEmpty)
             }
-            List(state.devices) { device in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(device.deviceId).font(.headline)
-                    Text("\(device.boardType ?? "--") · \(device.voiceMode ?? "--") · \(device.remoteAddress ?? "")")
-                        .foregroundStyle(.secondary)
+
+            if state.devices.isEmpty {
+                EmptyPanel(title: "暂无设备连接", detail: "确认客户端服务已启动，墨水屏设备在同一局域网内。")
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(state.devices) { device in
+                        InkCard {
+                            HStack(spacing: 14) {
+                                Image(systemName: "display")
+                                    .font(.title2)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(device.deviceId)
+                                        .font(.headline)
+                                        .textSelection(.enabled)
+                                    Text("\(device.boardType ?? "--") · \(device.voiceMode ?? "--")")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(device.remoteAddress ?? "--")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
                 }
-                .padding(.vertical, 4)
             }
-            .scrollContentBackground(.hidden)
         }
     }
 }
 
-// MARK: - Todo (enhanced with date picker & edit)
+// MARK: - Todo
 
 struct TodoView: View {
     @EnvironmentObject private var state: AppState
@@ -353,38 +470,38 @@ struct TodoView: View {
     @State private var dueDate: Date?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            PageHeader(title: "待办", subtitle: state.inlineStatus)
-            HStack {
-                TextField("新增待办", text: $title)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { add() }
-                DatePicker("截止日期", selection: Binding(
-                    get: { dueDate ?? Date() },
-                    set: { dueDate = $0 }
-                ), displayedComponents: .date)
-                .labelsHidden()
-                .opacity(dueDate == nil ? 0.6 : 1)
-                Button(dueDate == nil ? "📅" : "✕") {
-                    dueDate = dueDate == nil ? Date() : nil
-                }
-                .glassButton()
-                Button("添加") { add() }.glassProminentButton()
-                Button("同步提醒") { Task { await state.runReminderSync() } }.glassButton()
-            }
-            List {
-                Section("进行中") {
-                    ForEach(state.todos) { item in
-                        TodoRow(item: item)
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(eyebrow: "TASKS", title: "待办", subtitle: state.inlineStatus)
+
+            InkPanel(title: "新增待办", symbol: "plus.circle") {
+                HStack(spacing: 10) {
+                    TextField("输入待办内容", text: $title)
+                        .textFieldStyle(.plain)
+                        .onSubmit { add() }
+                        .padding(.horizontal, 10)
+                        .frame(height: 34)
+                        .background(.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.primary.opacity(0.2), lineWidth: 1))
+                    DatePicker("截止日期", selection: Binding(
+                        get: { dueDate ?? Date() },
+                        set: { dueDate = $0 }
+                    ), displayedComponents: .date)
+                    .labelsHidden()
+                    .opacity(dueDate == nil ? 0.55 : 1)
+                    Button(dueDate == nil ? "设置日期" : "清除日期") {
+                        dueDate = dueDate == nil ? Date() : nil
                     }
-                }
-                Section("归档") {
-                    ForEach(state.archivedTodos) { item in
-                        TodoRow(item: item, archived: true)
-                    }
+                    .inkButton()
+                    Button("添加") { add() }.inkProminentButton()
+                    Button("同步提醒") { Task { await state.runReminderSync() } }.inkButton()
                 }
             }
-            .scrollContentBackground(.hidden)
+
+            HStack(alignment: .top, spacing: 14) {
+                TodoSection(title: "进行中", items: state.todos, archived: false)
+                TodoSection(title: "归档", items: state.archivedTodos, archived: true)
+                    .frame(maxWidth: 360)
+            }
         }
     }
 
@@ -397,6 +514,29 @@ struct TodoView: View {
     }
 }
 
+struct TodoSection: View {
+    let title: String
+    let items: [TodoItem]
+    let archived: Bool
+
+    var body: some View {
+        InkPanel(title: title, symbol: archived ? "archivebox" : "checklist") {
+            if items.isEmpty {
+                Text(archived ? "暂无归档" : "暂无待办")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+            } else {
+                LazyVStack(spacing: 8) {
+                    ForEach(items) { item in
+                        TodoRow(item: item, archived: archived)
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct TodoRow: View {
     @EnvironmentObject private var state: AppState
     let item: TodoItem
@@ -405,46 +545,61 @@ struct TodoRow: View {
     @State private var editTitle = ""
 
     var body: some View {
-        HStack {
-            if !archived {
-                Button {
-                    Task { await state.setTodo(item, completed: !item.completed) }
-                } label: {
-                    Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
+        InkCard {
+            HStack(alignment: .center, spacing: 10) {
+                if !archived {
+                    Button {
+                        Task { await state.setTodo(item, completed: !item.completed) }
+                    } label: {
+                        Image(systemName: item.completed ? "checkmark.square.fill" : "square")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            }
 
-            if isEditing {
-                TextField("", text: $editTitle)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { saveEdit() }
-                Button("保存") { saveEdit() }.glassProminentButton()
-                Button("取消") { isEditing = false }.glassButton()
-            } else {
-                Text(item.title)
-                    .strikethrough(item.completed)
-                if let dueAt = item.dueAt, !dueAt.isEmpty {
-                    Text(formatDueDate(dueAt))
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                if isEditing {
+                    TextField("", text: $editTitle)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 8)
+                        .frame(height: 30)
+                        .background(.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(.primary.opacity(0.2), lineWidth: 1))
+                        .onSubmit { saveEdit() }
+                    Button("保存") { saveEdit() }.inkProminentButton()
+                    Button("取消") { isEditing = false }.inkButton()
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.title)
+                            .font(.callout.weight(.medium))
+                            .strikethrough(item.completed)
+                            .foregroundStyle(item.completed ? .secondary : .primary)
+                        HStack(spacing: 8) {
+                            if let dueAt = item.dueAt, !dueAt.isEmpty {
+                                Label(formatDueDate(dueAt), systemImage: "calendar")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if item.appleId != nil {
+                                Label("提醒", systemImage: "bell")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
-                if item.appleId != nil {
-                    Text("提醒").font(.caption).foregroundStyle(.secondary)
-                }
-            }
 
-            Spacer()
+                Spacer(minLength: 12)
 
-            if !isEditing && !archived {
-                Button("编辑") {
-                    editTitle = item.title
-                    isEditing = true
+                if !isEditing && !archived {
+                    Button("编辑") {
+                        editTitle = item.title
+                        isEditing = true
+                    }
+                    .inkButton()
                 }
-                .glassButton()
+                Button("删除") { Task { await state.deleteTodo(item) } }
+                    .inkButton()
             }
-            Button("删除") { Task { await state.deleteTodo(item) } }
-                .glassButton()
         }
     }
 
@@ -474,84 +629,76 @@ struct RemindersView: View {
     @State private var listsLoaded = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                PageHeader(title: "提醒事项同步", subtitle: state.inlineStatus)
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(eyebrow: "APPLE REMINDERS", title: "提醒事项同步", subtitle: state.inlineStatus)
 
-                HStack {
-                    Button("立即同步") { Task { await state.runReminderSync() } }
-                        .glassProminentButton()
-                    Button("加载列表") { Task { await state.fetchSyncLists(); listsLoaded = true } }
-                        .glassButton()
-                    Button("刷新状态") { Task { await state.refreshRuntime() } }
-                        .glassButton()
-                    Spacer()
-                }
+            HStack(spacing: 10) {
+                Button("立即同步") { Task { await state.runReminderSync() } }
+                    .inkProminentButton()
+                Button("加载列表") { Task { await state.fetchSyncLists(); listsLoaded = true } }
+                    .inkButton()
+                Button("刷新状态") { Task { await state.refreshRuntime() } }
+                    .inkButton()
+                Spacer()
+                StatusBadge(text: state.syncStatus?.enabled == true ? "SYNC ON" : "SYNC OFF", active: state.syncStatus?.enabled == true)
+            }
 
-                // Sync status
-                GlassPanel {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("同步状态").font(.headline)
-                        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
-                            GridRow {
-                                Text("状态")
-                                Text(state.syncStatus?.enabled == true ? "已启用" : "未启用")
-                                    .foregroundStyle(state.syncStatus?.enabled == true ? .green : .secondary)
-                            }
-                            if let count = state.syncStatus?.syncCount {
-                                GridRow { Text("同步次数"); Text("\(count)") }
-                            }
-                            if let lastSync = state.syncStatus?.lastSyncAt, lastSync > 0 {
-                                GridRow { Text("上次同步"); Text(formatTimestamp(lastSync)) }
-                            }
-                            if let error = state.syncStatus?.lastError, !error.isEmpty {
-                                GridRow { Text("最近错误"); Text(error).foregroundStyle(.red) }
-                            }
+            HStack(alignment: .top, spacing: 14) {
+                InkPanel(title: "同步状态", symbol: "arrow.triangle.2.circlepath") {
+                    VStack(spacing: 10) {
+                        InfoRow("状态", state.syncStatus?.enabled == true ? "已启用" : "未启用")
+                        if let count = state.syncStatus?.syncCount {
+                            InfoRow("同步次数", "\(count)")
+                        }
+                        if let lastSync = state.syncStatus?.lastSyncAt, lastSync > 0 {
+                            InfoRow("上次同步", formatTimestamp(lastSync))
+                        }
+                        if let error = state.syncStatus?.lastError, !error.isEmpty {
+                            InfoRow("最近错误", error)
                         }
                     }
                 }
+                .frame(width: 330)
 
-                // Sync config
-                GlassPanel {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("同步配置").font(.headline)
+                InkPanel(title: "同步配置", symbol: "list.bullet.rectangle") {
+                    VStack(alignment: .leading, spacing: 12) {
                         Toggle("启用提醒事项同步", isOn: $syncEnabled)
-                        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
-                            GridRow { Text("remindctl 路径"); TextField("remindctl", text: $remindctlPath) }
-                            GridRow { Text("轮询间隔（秒）"); TextField("15", value: $pollSec, format: .number) }
+                            .toggleStyle(InkCheckboxToggleStyle())
+                        InkFormRow("remindctl 路径") {
+                            TextField("remindctl", text: $remindctlPath).textFieldStyle(.plain)
+                        }
+                        InkFormRow("轮询间隔") {
+                            TextField("15", value: $pollSec, format: .number).textFieldStyle(.plain)
                         }
                         if listsLoaded && !state.reminderLists.isEmpty {
-                            Text("提醒事项列表").font(.callout.weight(.medium))
+                            Divider()
+                            Text("提醒事项列表")
+                                .font(.callout.weight(.semibold))
                             ForEach(state.reminderLists) { list in
-                                HStack {
-                                    Button {
-                                        selectedList = list.id
-                                    } label: {
-                                        HStack {
-                                            Image(systemName: selectedList == list.id ? "checkmark.circle.fill" : "circle")
-                                            Text(list.title)
-                                            Text("(\(list.reminderCount))").foregroundStyle(.secondary)
-                                        }
+                                Button {
+                                    selectedList = list.id
+                                } label: {
+                                    HStack {
+                                        Image(systemName: selectedList == list.id ? "checkmark.circle.fill" : "circle")
+                                        Text(list.title)
+                                        Text("(\(list.reminderCount))").foregroundStyle(.secondary)
+                                        Spacer()
                                     }
-                                    .buttonStyle(.plain)
-                                    Spacer()
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
-                        HStack {
-                            Button("保存配置") {
-                                Task {
-                                    await state.saveSyncConfig(
-                                        enabled: syncEnabled,
-                                        remindctlPath: remindctlPath,
-                                        list: selectedList,
-                                        pollSec: pollSec
-                                    )
-                                }
+                        Button("保存配置") {
+                            Task {
+                                await state.saveSyncConfig(
+                                    enabled: syncEnabled,
+                                    remindctlPath: remindctlPath,
+                                    list: selectedList,
+                                    pollSec: pollSec
+                                )
                             }
-                            .glassProminentButton()
-                            Spacer()
                         }
+                        .inkProminentButton()
                     }
                 }
             }
@@ -578,61 +725,42 @@ struct DisplayConfigView: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                PageHeader(title: "墨水屏显示配置", subtitle: state.inlineStatus)
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(eyebrow: "E-PAPER", title: "墨水屏显示", subtitle: state.inlineStatus)
 
-                GlassPanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("刷新间隔").font(.headline)
+            InkPanel(title: "刷新节奏", symbol: "timer") {
+                VStack(spacing: 16) {
+                    SliderRow(title: "Todo 刷新间隔", value: Binding(
+                        get: { Double(state.displayConfig.todoRefreshMs) },
+                        set: { state.displayConfig.todoRefreshMs = Int($0) }
+                    ), range: 200...10000, suffix: "ms")
 
-                        HStack {
-                            Text("Todo 刷新间隔")
-                            Slider(value: Binding(
-                                get: { Double(state.displayConfig.todoRefreshMs) },
-                                set: { state.displayConfig.todoRefreshMs = Int($0) }
-                            ), in: 200...10000, step: 100)
-                            Text("\(state.displayConfig.todoRefreshMs) ms")
-                                .font(.caption.monospaced())
-                                .frame(width: 70)
-                        }
-
-                        HStack {
-                            Text("Coding 刷新间隔")
-                            Slider(value: Binding(
-                                get: { Double(state.displayConfig.codingRefreshMs) },
-                                set: { state.displayConfig.codingRefreshMs = Int($0) }
-                            ), in: 200...10000, step: 100)
-                            Text("\(state.displayConfig.codingRefreshMs) ms")
-                                .font(.caption.monospaced())
-                                .frame(width: 70)
-                        }
-                    }
+                    SliderRow(title: "Coding 刷新间隔", value: Binding(
+                        get: { Double(state.displayConfig.codingRefreshMs) },
+                        set: { state.displayConfig.codingRefreshMs = Int($0) }
+                    ), range: 200...10000, suffix: "ms")
                 }
+            }
 
-                GlassPanel {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("显示风格").font(.headline)
-                        Picker("", selection: Binding(
-                            get: { state.displayConfig.style },
-                            set: { state.displayConfig.style = $0 }
-                        )) {
-                            Text("亮色").tag("light")
-                            Text("暗色").tag("dark")
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(maxWidth: 300)
-                    }
+            InkPanel(title: "显示风格", symbol: "circle.lefthalf.filled") {
+                Picker("", selection: Binding(
+                    get: { state.displayConfig.style },
+                    set: { state.displayConfig.style = $0 }
+                )) {
+                    Text("亮色").tag("light")
+                    Text("暗色").tag("dark")
                 }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 300)
+            }
 
-                HStack {
-                    Button("保存显示配置") { Task { await state.saveDisplayConfig() } }
-                        .glassProminentButton()
-                    Spacer()
-                    Text("修改后设备会在下一次刷新周期生效")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            HStack {
+                Button("保存显示配置") { Task { await state.saveDisplayConfig() } }
+                    .inkProminentButton()
+                Spacer()
+                Text("修改后在设备下一次刷新周期生效")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .onAppear {
@@ -641,7 +769,7 @@ struct DisplayConfigView: View {
     }
 }
 
-// MARK: - Logs (enhanced: dual-column with filters)
+// MARK: - Logs
 
 struct LogsView: View {
     @EnvironmentObject private var state: AppState
@@ -649,40 +777,31 @@ struct LogsView: View {
     @State private var svcFilter: ServiceLogFilter = .all
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            PageHeader(title: "日志", subtitle: state.inlineStatus)
-            HStack(spacing: 16) {
-                // CLI Events
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("CLI 事件").font(.headline)
-                        Spacer()
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(eyebrow: "TRACE", title: "日志", subtitle: state.inlineStatus)
+            HStack(alignment: .top, spacing: 14) {
+                InkPanel(title: "CLI 事件", symbol: "terminal") {
+                    VStack(spacing: 10) {
                         Picker("", selection: $cliFilter) {
                             ForEach(LogFilter.allCases) { Text($0.label).tag($0) }
                         }
                         .pickerStyle(.segmented)
-                        .frame(maxWidth: 240)
+                        LogText(lines: filteredCliLines)
+                            .frame(minHeight: 430)
                     }
-                    LogText(lines: filteredCliLines)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                // Service Log
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("服务日志").font(.headline)
-                        Spacer()
+                InkPanel(title: "服务日志", symbol: "server.rack") {
+                    VStack(spacing: 10) {
                         Picker("", selection: $svcFilter) {
                             ForEach(ServiceLogFilter.allCases) { Text($0.label).tag($0) }
                         }
                         .pickerStyle(.segmented)
-                        .frame(maxWidth: 200)
+                        LogText(lines: filteredServiceLines)
+                            .frame(minHeight: 430)
                     }
-                    LogText(lines: filteredServiceLines)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -709,14 +828,25 @@ struct LogsView: View {
 // MARK: - Shared Components
 
 struct PageHeader: View {
+    var eyebrow: String = ""
     let title: String
     let subtitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.largeTitle.weight(.semibold))
+        VStack(alignment: .leading, spacing: 6) {
+            if !eyebrow.isEmpty {
+                Text(eyebrow)
+                    .font(.caption.monospaced().weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .tracking(1.5)
+            }
+            Text(title)
+                .font(.system(size: 34, weight: .bold, design: .rounded))
             if !subtitle.isEmpty {
-                Text(subtitle).font(.callout).foregroundStyle(.secondary)
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -727,15 +857,175 @@ struct MetricView: View {
     let title: String
     let value: String
     let detail: String
+    let symbol: String
 
     var body: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.caption).foregroundStyle(.secondary)
-                Text(value).font(.title2.weight(.semibold))
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        InkCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: symbol)
+                    Spacer()
+                    Text(title.uppercased())
+                        .font(.caption2.monospaced().weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+                Text(value)
+                    .font(.title2.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(detail.isEmpty ? "--" : detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: 92)
+        }
+    }
+}
+
+struct InkPanel<Content: View>: View {
+    let title: String
+    let symbol: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                Text(title)
+                    .font(.headline)
+                Spacer()
+            }
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.primary.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.04), radius: 14, x: 0, y: 8)
+    }
+}
+
+struct InkCard<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .padding(13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(.primary.opacity(0.18), lineWidth: 1)
+            )
+    }
+}
+
+struct EmptyPanel: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        InkCard {
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 160)
+        }
+    }
+}
+
+struct InkStatusPill: View {
+    let title: String
+    let detail: String
+    let active: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(active ? Color.primary : Color.clear)
+                    .overlay(Circle().stroke(.primary, lineWidth: 1))
+                    .frame(width: 8, height: 8)
+                Text(title)
+                    .font(.caption.monospaced().weight(.bold))
+            }
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.primary.opacity(0.16), lineWidth: 1))
+    }
+}
+
+struct StatusBadge: View {
+    let text: String
+    let active: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.caption.monospaced().weight(.bold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .foregroundStyle(active ? Color(nsColor: .textBackgroundColor) : .primary)
+            .background(active ? Color.primary : Color.clear, in: Capsule())
+            .overlay(Capsule().stroke(.primary.opacity(0.5), lineWidth: 1))
+    }
+}
+
+struct StatusDot: View {
+    let status: String
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(.primary, lineWidth: 1.4)
+                .frame(width: 18, height: 18)
+            if status == "ok" {
+                Circle()
+                    .fill(.primary)
+                    .frame(width: 9, height: 9)
+            } else if status == "missing" {
+                Rectangle()
+                    .fill(.primary)
+                    .frame(width: 9, height: 2)
+            }
+        }
+    }
+}
+
+struct InkFormRow<Content: View>: View {
+    let label: String
+    @ViewBuilder var content: Content
+
+    init(_ label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Text(label)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 132, alignment: .leading)
+            content
+                .padding(.horizontal, 10)
+                .frame(minHeight: 34)
+                .background(.white.opacity(0.62), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.primary.opacity(0.18), lineWidth: 1))
         }
     }
 }
@@ -745,9 +1035,54 @@ struct PathField: View {
     let choose: () -> Void
 
     var body: some View {
-        HStack {
+        HStack(spacing: 8) {
             TextField("", text: $text)
-            Button("选择") { choose() }.glassButton()
+                .textFieldStyle(.plain)
+            Button("选择") { choose() }.inkButton()
+        }
+    }
+}
+
+struct SliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let suffix: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.callout.weight(.semibold))
+                .frame(width: 140, alignment: .leading)
+            Slider(value: $value, in: range, step: 100)
+            Text("\(Int(value)) \(suffix)")
+                .font(.caption.monospaced().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 86, alignment: .trailing)
+        }
+    }
+}
+
+struct InfoRow: View {
+    let label: String
+    let value: String
+
+    init(_ label: String, _ value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value.isEmpty ? "--" : value)
+                .font(.callout.monospaced())
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
         }
     }
 }
@@ -759,60 +1094,130 @@ struct LogText: View {
         ScrollView {
             Text(lines.isEmpty ? "暂无日志" : lines.joined(separator: "\n"))
                 .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(lines.isEmpty ? .secondary : .primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
                 .padding(12)
         }
-        .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.primary.opacity(0.12), lineWidth: 1))
     }
 }
 
-struct GlassPanel<Content: View>: View {
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(.white.opacity(0.18), lineWidth: 1)
-            )
-    }
-}
-
-struct GlassBackground: View {
+struct InkBackground: View {
     var body: some View {
         ZStack {
+            Color(nsColor: .windowBackgroundColor)
             LinearGradient(
-                colors: [Color(nsColor: .windowBackgroundColor), Color.accentColor.opacity(0.14)],
+                colors: [
+                    Color.primary.opacity(0.035),
+                    Color.clear,
+                    Color.primary.opacity(0.025)
+                ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-            Rectangle().fill(.ultraThinMaterial)
+            Canvas { context, size in
+                let step: CGFloat = 18
+                var path = Path()
+                var x: CGFloat = 0
+                while x < size.width {
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: size.height))
+                    x += step
+                }
+                var y: CGFloat = 0
+                while y < size.height {
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: size.width, y: y))
+                    y += step
+                }
+                context.stroke(path, with: .color(.primary.opacity(0.025)), lineWidth: 0.5)
+            }
         }
         .ignoresSafeArea()
     }
 }
 
 extension View {
-    @ViewBuilder
-    func glassButton() -> some View {
-        if #available(macOS 26.0, *) {
-            self.buttonStyle(.glass)
-        } else {
-            self.buttonStyle(.bordered)
-        }
+    func inkButton() -> some View {
+        buttonStyle(InkButtonStyle(prominent: false))
     }
 
-    @ViewBuilder
-    func glassProminentButton() -> some View {
-        if #available(macOS 26.0, *) {
-            self.buttonStyle(.glassProminent)
-        } else {
-            self.buttonStyle(.borderedProminent)
+    func inkProminentButton() -> some View {
+        buttonStyle(InkButtonStyle(prominent: true))
+    }
+
+    func inkToolbarButton() -> some View {
+        self.inkButton()
+    }
+
+    func inkToolbarProminentButton() -> some View {
+        self.inkProminentButton()
+    }
+}
+
+struct InkButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    let prominent: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 30)
+            .background(background(configuration: configuration), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.primary.opacity(prominent ? 0 : 0.28), lineWidth: 1)
+            )
+            .opacity(isEnabled ? 1 : 0.42)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+    }
+
+    private var foreground: Color {
+        if prominent {
+            return Color(nsColor: .textBackgroundColor)
         }
+        return .primary
+    }
+
+    private func background(configuration: Configuration) -> some ShapeStyle {
+        if prominent {
+            return Color.primary.opacity(configuration.isPressed ? 0.78 : 0.92)
+        }
+        return Color.primary.opacity(configuration.isPressed ? 0.10 : 0.035)
+    }
+}
+
+struct InkCheckboxToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(configuration.isOn ? Color.primary : Color.clear)
+                        .frame(width: 18, height: 18)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(.primary.opacity(0.55), lineWidth: 1.2)
+                        .frame(width: 18, height: 18)
+                    if configuration.isOn {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color(nsColor: .textBackgroundColor))
+                    }
+                }
+                configuration.label
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

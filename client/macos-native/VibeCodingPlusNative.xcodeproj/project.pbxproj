@@ -11,6 +11,7 @@
 		3404843D0462ADCF9D5AE7B9 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8664D9B154FB0CE06F792243 /* Views.swift */; };
 		34F57545DBE953624E9D3107 /* DiscoveryServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55EAB939BC51E95066BA4266 /* DiscoveryServer.swift */; };
 		519DD4A059154AED4C4E3C3F /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47DC063FE3301366C1C8FEAA /* ServerConfig.swift */; };
+		5C620212C9EFB80FB94EEEBB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 251D39D20F6EA1BDDC9D3A5A /* Assets.xcassets */; };
 		5DCCE673B44B8CE9159E6CBE /* Shell.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2669562A2E45AC8088F783C /* Shell.swift */; };
 		62CD390FF6307F0BBDA699BB /* WebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 824B4651D7EDE8F937D5A589 /* WebSocketServer.swift */; };
 		7C6CD0D8DE9C9B54B6AF872D /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C974DF24328572829A67953 /* AppState.swift */; };
@@ -32,6 +33,7 @@
 		100F9937AAED2DAADE9E92A2 /* RemindersSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemindersSync.swift; sourceTree = "<group>"; };
 		195B5A4B9AE8D19B2C28EC0C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		251A6D13EA88AEBF798AEAFD /* NativeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeServer.swift; sourceTree = "<group>"; };
+		251D39D20F6EA1BDDC9D3A5A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		29A2FE6304AC8D694B79E035 /* TodoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoService.swift; sourceTree = "<group>"; };
 		47DC063FE3301366C1C8FEAA /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
 		54733654901D308D57343C4F /* STTService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = STTService.swift; sourceTree = "<group>"; };
@@ -102,6 +104,14 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		95AA289D3BA047FA99F04D4C /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				251D39D20F6EA1BDDC9D3A5A /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		A86783667281FE2F0E7943BE /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -113,6 +123,7 @@
 		DF7D28F34CF043C1E2720AE0 = {
 			isa = PBXGroup;
 			children = (
+				95AA289D3BA047FA99F04D4C /* Resources */,
 				82F3974B34E70E4DEE6D8D94 /* Sources */,
 				A86783667281FE2F0E7943BE /* Products */,
 			);
@@ -126,6 +137,7 @@
 			buildConfigurationList = E910DE81C8A5185F1584D0DD /* Build configuration list for PBXNativeTarget "VibeCodingPlusNative" */;
 			buildPhases = (
 				E1E29926F84E649788907437 /* Sources */,
+				16997EAA2EECDC9A664F5AEB /* Resources */,
 			);
 			buildRules = (
 			);
@@ -171,6 +183,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		16997EAA2EECDC9A664F5AEB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5C620212C9EFB80FB94EEEBB /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		E1E29926F84E649788907437 /* Sources */ = {
