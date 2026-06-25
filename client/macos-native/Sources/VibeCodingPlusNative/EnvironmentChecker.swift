@@ -1,5 +1,10 @@
 import AppKit
 import Foundation
+import EventKit
+#if canImport(AVFoundation)
+import AVFoundation
+import AVFAudio
+#endif
 
 struct EnvironmentChecker {
     func check(config: AppConfig) async -> EnvironmentReport {
@@ -78,20 +83,7 @@ struct EnvironmentChecker {
                 version: versions["whisper_cpp"] ?? ""
             ),
             sttCheck(config: config),
-            EnvironmentCheck(
-                id: "macos_permissions",
-                label: "macOS 权限",
-                type: "permission",
-                status: "optional",
-                required: config.sendTarget == .textInjector,
-                installable: false,
-                installLabel: "",
-                command: "",
-                path: "",
-                version: "",
-                purpose: "输入注入、麦克风、提醒事项访问",
-                note: "首次使用时系统会弹出授权；输入注入需要辅助功能/自动化权限"
-            )
+            macosPermissionsCheck(config: config)
         ]
 
         return EnvironmentReport(
@@ -100,6 +92,75 @@ struct EnvironmentChecker {
             provider: provider.rawValue,
             sendTarget: config.sendTarget,
             checks: checks
+        )
+    }
+
+    private func macosPermissionsCheck(config: AppConfig) -> EnvironmentCheck {
+        let accessibility = AXIsProcessTrusted()
+        let reminderGranted: Bool = {
+            let status = EKEventStore.authorizationStatus(for: .reminder)
+            return status == .authorized || status == .fullAccess || status == .writeOnly
+        }()
+        let micGranted: Bool = {
+            #if canImport(AVFoundation)
+            if #available(macOS 14.0, *) {
+                return AVAudioApplication.shared.recordPermission == .granted
+            } else {
+                return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            }
+            #else
+            return false
+            #endif
+        }()
+
+        let needsAccessibility = config.sendTarget == .textInjector
+        let needsReminders = config.remindersSyncEnabled
+        let needsMic = true
+
+        var missing: [String] = []
+        if needsAccessibility && !accessibility { missing.append("辅助功能") }
+        if needsReminders && !reminderGranted { missing.append("提醒事项") }
+        if needsMic && !micGranted { missing.append("麦克风") }
+
+        let allRequired = [needsAccessibility ? accessibility : true,
+                           needsReminders ? reminderGranted : true,
+                           micGranted].allSatisfy { $0 }
+        let anyMissing = !missing.isEmpty
+
+        var status = "optional"
+        if allRequired && !anyMissing {
+            status = "ok"
+        } else if anyMissing {
+            status = "missing"
+        }
+
+        let parts: [String] = [
+            "辅助功能: \(accessibility ? "已授权" : (needsAccessibility ? "未授权" : "不需要"))",
+            "麦克风: \(micGranted ? "已授权" : "未授权")",
+            "提醒事项: \(reminderGranted ? "已授权" : (needsReminders ? "未授权" : "不需要"))"
+        ]
+        let version = parts.joined(separator: " · ")
+
+        let note: String
+        if anyMissing {
+            note = "缺少: \(missing.joined(separator: "、")) — 点击「打开权限」后在系统设置中授权，再点「重新检测」"
+        } else {
+            note = "已授权所需权限；点击「打开权限」可重新检查系统设置"
+        }
+
+        return EnvironmentCheck(
+            id: "macos_permissions",
+            label: "macOS 权限",
+            type: "permission",
+            status: status,
+            required: needsAccessibility || needsReminders,
+            installable: false,
+            installLabel: "",
+            command: "",
+            path: "",
+            version: version,
+            purpose: "输入注入、麦克风、提醒事项访问",
+            note: note
         )
     }
 

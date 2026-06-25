@@ -48,6 +48,7 @@ final class AppState: ObservableObject {
         sc.deepSeekBaseUrl = config.deepSeekBaseUrl
         sc.openaiApiKey = config.openaiApiKey
         sc.openaiModel = config.openaiModel
+        sc.openaiBaseUrl = config.openaiBaseUrl
         sc.volcengineAppKey = config.volcengineAppKey
         sc.volcengineAccessKey = config.volcengineAccessKey
         sc.whisperCppModelPath = config.whisperCppModelPath
@@ -219,7 +220,13 @@ final class AppState: ObservableObject {
 
     func openPermissions() {
         checker.openPermissions()
-        inlineStatus = "已打开系统设置，请允许辅助功能/自动化/麦克风权限"
+        inlineStatus = "已打开系统设置，请允许辅助功能/自动化/麦克风权限；授权后自动重新检测"
+        Task {
+            for _ in 0..<8 {
+                try? await Task.sleep(for: .seconds(3))
+                await refreshEnvironment()
+            }
+        }
     }
 
     func openToolLogin(_ id: String) {
@@ -233,6 +240,27 @@ final class AppState: ObservableObject {
 
     func openConfigFolder() {
         NSWorkspace.shared.open(settingsStore.configDirectory)
+    }
+
+    func propagateSendTarget() {
+        guard serviceRunning, let server = nativeServer else { return }
+        let target = config.sendTarget.rawValue
+        Task { await server.updateSendTarget(target) }
+    }
+
+    func propagateRuntimeInput() {
+        guard serviceRunning, let server = nativeServer else { return }
+        let target = config.sendTarget.rawValue
+        let deliveryMode = config.transcriptDeliveryMode
+        let injectionMode = config.textInjectionMode
+        Task { await server.updateRuntimeInput(sendTarget: target, deliveryMode: deliveryMode, injectionMode: injectionMode) }
+    }
+
+    func setDeviceVoiceMode(_ device: DeviceInfo, mode: String) async {
+        guard let server = nativeServer else { return }
+        await server.setDeviceVoiceMode(deviceId: device.deviceId, mode: mode)
+        inlineStatus = mode == "todo" ? "已切换到备忘模式" : "已切换到编程模式"
+        await refreshRuntime()
     }
 
     func chooseDirectory(for target: SendTarget) {
@@ -300,34 +328,37 @@ final class AppState: ObservableObject {
 
     // MARK: - Todo
 
-    func addTodo(_ title: String, dueAt: String? = nil) async {
+    func addTodo(_ title: String, dueAt: String? = nil, reminderList: String? = nil) async {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             inlineStatus = "请输入待办内容"
             return
         }
-        guard let server = nativeServer else { return }
-        let snapshot = await server.createTodo(title: trimmed, dueAt: dueAt)
+        guard let server = nativeServer else {
+            inlineStatus = "请先启动服务"
+            return
+        }
+        let snapshot = await server.createTodo(title: trimmed, dueAt: dueAt, reminderList: reminderList)
         applyTodoSnapshot(snapshot)
         inlineStatus = "待办已添加"
     }
 
     func setTodo(_ item: TodoItem, completed: Bool) async {
-        guard let server = nativeServer else { return }
+        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
         let snapshot = await server.updateTodo(id: item.id, index: nil, title: nil, dueAt: nil, completed: completed)
         applyTodoSnapshot(snapshot)
         inlineStatus = completed ? "待办已完成" : "待办已恢复"
     }
 
     func editTodo(_ item: TodoItem, title: String, dueAt: String?) async {
-        guard let server = nativeServer else { return }
+        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
         let snapshot = await server.updateTodo(id: item.id, index: nil, title: title, dueAt: dueAt, completed: nil)
         applyTodoSnapshot(snapshot)
         inlineStatus = "待办已更新"
     }
 
     func deleteTodo(_ item: TodoItem) async {
-        guard let server = nativeServer else { return }
+        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
         let snapshot = await server.deleteTodo(id: item.id, index: nil)
         applyTodoSnapshot(snapshot)
         inlineStatus = "待办已删除"
@@ -351,12 +382,14 @@ final class AppState: ObservableObject {
         reminderLists = await server.getReminderLists()
     }
 
-    func saveSyncConfig(enabled: Bool, remindctlPath: String, list: String, pollSec: Int) async {
+    func saveSyncConfig(enabled: Bool, list: String, pollSec: Int) async {
         config.remindersSyncEnabled = enabled
         config.remindersListName = list
         config.remindersPollSec = pollSec
         try? settingsStore.saveConfig(config)
-        inlineStatus = "同步配置已保存（重启服务后生效）"
+        await nativeServer?.updateReminderSyncConfig(enabled: enabled, list: list, pollSec: pollSec)
+        inlineStatus = enabled ? "同步配置已保存并启用" : "同步配置已保存并停用"
+        await refreshRuntime()
     }
 
     // MARK: - Display Config
@@ -372,8 +405,13 @@ final class AppState: ObservableObject {
         config.displayCodingRefreshMs = displayConfig.codingRefreshMs
         config.displayStyle = displayConfig.style
         try? settingsStore.saveConfig(config)
-        inlineStatus = "显示配置已保存"
+        inlineStatus = "显示配置已保存并推送到设备"
         await refreshRuntime()
+    }
+
+    func forceDisplayRefresh() async {
+        await nativeServer?.forceDisplayRefresh()
+        inlineStatus = "已请求设备立即刷新屏幕"
     }
 
     // MARK: - Server Restart

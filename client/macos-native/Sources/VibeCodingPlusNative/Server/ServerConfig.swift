@@ -45,6 +45,7 @@ struct ServerConfig {
     var openaiApiKey: String = ""
     var openaiModel: String = "whisper-1"
     var openaiTranscribeModel: String = ""
+    var openaiBaseUrl: String = ""
 
     // MARK: - Volcengine
 
@@ -278,6 +279,7 @@ private extension ServerConfig {
         c.openaiApiKey = v["OPENAI_API_KEY"] ?? ""
         c.openaiModel = v["OPENAI_TRANSCRIBE_MODEL"] ?? v["OPENAI_MODEL"] ?? c.openaiModel
         c.openaiTranscribeModel = v["OPENAI_TRANSCRIBE_MODEL"] ?? ""
+        c.openaiBaseUrl = (v["OPENAI_BASE_URL"] ?? v["OPENAI_API_BASE"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Volcengine
         c.volcengineAppKey = v["VOLCENGINE_APP_KEY"] ?? ""

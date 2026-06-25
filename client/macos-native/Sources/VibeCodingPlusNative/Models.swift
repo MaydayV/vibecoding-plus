@@ -97,6 +97,7 @@ struct AppConfig {
     var textInjectionMode: String = "type_and_enter"
     var openaiApiKey: String = ""
     var openaiModel: String = "whisper-1"
+    var openaiBaseUrl: String = ""
     var volcengineAppKey: String = ""
     var volcengineAccessKey: String = ""
     var whisperCppModelPath: String = ""

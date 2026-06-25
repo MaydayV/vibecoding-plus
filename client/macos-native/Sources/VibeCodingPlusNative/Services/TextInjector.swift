@@ -81,9 +81,58 @@ enum TextInjector {
         }
     }
 
+    /// Sends a plain Return key press to the currently focused app.
+    static func pressReturn(dryRun: Bool = false) async throws {
+        if dryRun {
+            print("[inject] dry-run return")
+            return
+        }
+
+        try checkAccessibility()
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do {
+                    prepareFocusedTarget()
+                    try simulateKey(0x24) // Return key
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Clears the focused input field by selecting all (Cmd+A) then deleting
+    /// (Backspace). Used by the BOOT double-click "clear input" action.
+    static func clearInput(dryRun: Bool = false) async throws {
+        if dryRun {
+            print("[inject] dry-run clear input")
+            return
+        }
+
+        try checkAccessibility()
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do {
+                    prepareFocusedTarget()
+                    try simulateKey(0x00, flags: .maskCommand) // Cmd+A (select all)
+                    Thread.sleep(forTimeInterval: 0.08)
+                    try simulateKey(0x33) // Backspace (delete selection)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     // MARK: - Private (runs on serial queue)
 
     private static func injectOnQueue(_ text: String, mode: TextInjectionMode) throws {
+        prepareFocusedTarget()
+
         // 1. Save current clipboard content.
         let previousClipboard = NSPasteboard.general.string(forType: .string)
 
@@ -102,8 +151,8 @@ enum TextInjector {
                 try simulateKey(0x24) // Return key
             }
 
-            // 5. Brief delay then restore clipboard.
-            Thread.sleep(forTimeInterval: 0.10)
+            // 5. Give the target app enough time to consume the pasteboard.
+            Thread.sleep(forTimeInterval: 0.35)
             restoreClipboard(previousClipboard)
         } catch {
             // Always attempt to restore clipboard on failure.
@@ -119,6 +168,17 @@ enum TextInjector {
     }
 
     // MARK: - CGEvent Helpers
+
+    private static func prepareFocusedTarget() {
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier else {
+            return
+        }
+
+        DispatchQueue.main.sync {
+            NSApp.hide(nil)
+        }
+        Thread.sleep(forTimeInterval: 0.20)
+    }
 
     private static func simulateKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) throws {
         guard let source = CGEventSource(stateID: .hidSystemState) else {
@@ -147,9 +207,10 @@ enum TextInjector {
     // MARK: - Clipboard
 
     private static func restoreClipboard(_ previousContent: String?) {
-        guard let content = previousContent else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(content, forType: .string)
+        if let content = previousContent {
+            NSPasteboard.general.setString(content, forType: .string)
+        }
     }
 
     // MARK: - Accessibility Check

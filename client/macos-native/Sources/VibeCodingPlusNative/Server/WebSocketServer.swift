@@ -15,6 +15,7 @@ enum WSFrameMessage {
     case text(String)
     case binary(Data)
     case ping
+    case pong
     case close
 }
 
@@ -120,6 +121,7 @@ final class WSFrameParser {
             guard (byte0 & 0x80) != 0 else { return nil }
             return .binary(payload)
         case 0x09: return .ping
+        case 0x0A: return .pong
         case 0x08: return .close
         default:   return nil
         }
@@ -140,6 +142,7 @@ final class WSConnection: Identifiable, @unchecked Sendable {
     private var _metadata: [String: Any] = [:]
 
     var onMessage: (@Sendable (WSMessage) -> Void)?
+    var onPong: (@Sendable () -> Void)?
     var onDisconnect: (@Sendable () -> Void)?
 
     var metadata: [String: Any] {
@@ -228,6 +231,7 @@ final class WSConnection: Identifiable, @unchecked Sendable {
         case .text(let str):  onMessage?(.text(str))
         case .binary(let d):  onMessage?(.binary(d))
         case .ping:           sendRaw(WSEncoder.encode(opcode: .pong, payload: Data()))
+        case .pong:           onPong?()
         case .close:          close()
         }
     }

@@ -89,6 +89,7 @@ constexpr int64_t kOfflineSleepRetryIntervalUs = 15LL * 60 * 1000 * 1000;  // 15
 constexpr int64_t kReconnectPromptTimeoutMs = 15000;
 constexpr int64_t kTodoBootHoldMs = 600;
 constexpr int64_t kTodoBootDoubleClickWindowMs = 250;
+constexpr int64_t kInjectorBootDoubleClickWindowMs = 350;
 constexpr int64_t kNavDoubleClickWindowMs = 450;
 constexpr int64_t kNavLongPressMs = 2000;
 constexpr int64_t kNavShortPressMinMs = 15;
@@ -1379,6 +1380,15 @@ bool LanMicApp::SendEnter() {
     return SendJson(message);
 }
 
+bool LanMicApp::SendClearInput() {
+    char message[128];
+    snprintf(message,
+             sizeof(message),
+             "{\"type\":\"action_clear_input\",\"ts\":%lld}",
+             static_cast<long long>(esp_timer_get_time() / 1000));
+    return SendJson(message);
+}
+
 bool LanMicApp::SendAction(const char* action_type) {
     char message[128];
     snprintf(message,
@@ -1587,6 +1597,7 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
             active_page_ = Page::Summary;
         }
         SyncVoiceModeToActivePage();
+        UpdateDisplay();
     } else if (strcmp(type, "display_config") == 0) {
         cJSON* todo_refresh_ms = cJSON_GetObjectItemCaseSensitive(root, "todoRefreshMs");
         cJSON* coding_refresh_ms = cJSON_GetObjectItemCaseSensitive(root, "codingRefreshMs");
@@ -1607,10 +1618,19 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
             display_->SetSampleIntervalMs(interval);
             display_->SetInverted(display_dark_style_);
         }
+        UpdateDisplay();
+    } else if (strcmp(type, "force_refresh") == 0) {
+        UpdateDisplay();
     } else if (strcmp(type, "mode_state") == 0) {
         const char* mode = GetJsonString(root, "mode");
         if (mode != nullptr) {
             voice_mode_ = strcmp(mode, "todo") == 0 ? VoiceMode::Todo : VoiceMode::Normal;
+            if (!has_pending_transcript_ &&
+                phase_ != Phase::Recording &&
+                phase_ != Phase::Transcribing) {
+                active_page_ = PageForCurrentVoiceMode();
+                summary_scroll_offset_ = 0;
+            }
         }
     } else if (strcmp(type, "todo_state") == 0) {
 
@@ -1654,6 +1674,13 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
         offline_todo_mode_ = false;
         reconnect_stuck_prompt_ = false;
         FlushPendingTodoOps();
+        // 收到新的待办状态后立即刷新屏幕显示
+        if (voice_mode_ == VoiceMode::Todo &&
+            phase_ != Phase::Recording && phase_ != Phase::Transcribing) {
+            active_page_ = PageForCurrentVoiceMode();
+            summary_scroll_offset_ = 0;
+            UpdateDisplay();
+        }
     } else if (strcmp(type, "todo_result") == 0) {
         const char* message = GetJsonString(root, "message");
         const bool ok = GetJsonBool(root, "ok", false);
@@ -1744,6 +1771,12 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
             } else if (strcmp(status, "cli_busy") == 0) {
                 phase_ = Phase::Running;
                 status_text_ = std::string(GetToolLabel()) + " 忙碌";
+                active_page_ = Page::Summary;
+            } else if (strcmp(status, "input_error") == 0) {
+                const char* message = GetJsonString(root, "message");
+                phase_ = Phase::Error;
+                status_text_ = "输入失败";
+                hint_text_ = message != nullptr ? message : "检查辅助功能权限";
                 active_page_ = Page::Summary;
             } else {
                 status_text_ = status;
@@ -3020,7 +3053,8 @@ void LanMicApp::UpdateDisplay() {
                            : render_page == Page::Log     ? "日志"
                            :                               "设置";
     if (render_page != Page::Todo) {
-        texts.push_back({single_line(repo_name_.empty() ? "Codex" : repo_name_, 18), 12, kContentHeaderY, 16});
+        const std::string header_label = repo_name_.empty() ? std::string(GetToolLabel()) : repo_name_;
+        texts.push_back({single_line(header_label, 18), 12, kContentHeaderY, 16});
         texts.push_back({page_label, 316, kContentHeaderY, 16});
     }
 
@@ -3237,6 +3271,12 @@ void LanMicApp::Run() {
     bool todo_hold_started = false;
     int64_t last_todo_boot_release_ms = 0;
     bool todo_boot_short_pending = false;
+    // Text-injector normal-mode BOOT short-tap / double-click tracking.
+    // First short tap waits within the double-click window for a second tap;
+    // if none arrives, an action_enter is sent. Two taps within the window
+    // send action_clear_input to clear the focused input field.
+    bool injector_boot_short_pending = false;
+    int64_t last_injector_boot_release_ms = 0;
     bool up_nav_pressed_last = IsNavButtonPressed(TODO_UP_BUTTON_GPIO);
     bool down_nav_pressed_last = IsNavButtonPressed(TODO_DOWN_BUTTON_GPIO);
     bool up_nav_long_fallback_fired = false;
@@ -3270,12 +3310,10 @@ void LanMicApp::Run() {
             !has_pending_transcript_ &&
             (active_page_ == Page::Todo || active_page_ == Page::Summary) &&
             (phase_ == Phase::Idle || phase_ == Phase::Error || phase_ == Phase::Running);
-        const bool allow_down_undo_double =
-            !todo_menu_open_ &&
-            !has_pending_transcript_ &&
-            voice_mode_ == VoiceMode::Normal &&
-            active_page_ == Page::Summary &&
-            (phase_ == Phase::Idle || phase_ == Phase::Running);
+        // Down button no longer has a double-click action (undo moved to BOOT
+        // double-click). Keep this false so the nav driver treats down as a
+        // plain single-click scroll/navigation with no double-click window.
+        const bool allow_down_undo_double = false;
         const int64_t up_double_window_ms = allow_up_mode_double ? kNavDoubleClickWindowMs : 0;
         const int64_t down_double_window_ms = allow_down_undo_double ? kNavDoubleClickWindowMs : 0;
         if (up_nav_pressed_now && !up_nav_pressed_last) {
@@ -3388,6 +3426,37 @@ void LanMicApp::Run() {
                 ToggleSelectedTodo();
             }
         }
+        // Cancel a pending text-injector BOOT short-tap if the context changed
+        // (started recording, a transcript is pending, or target/mode left
+        // text_injector normal). This prevents a stale Enter after recording.
+        if (injector_boot_short_pending &&
+            (phase_ == Phase::Recording ||
+             phase_ == Phase::Transcribing ||
+             has_pending_transcript_ ||
+             !IsServerConnected() ||
+             send_target_ != "text_injector" ||
+             voice_mode_ != VoiceMode::Normal)) {
+            injector_boot_short_pending = false;
+            last_injector_boot_release_ms = 0;
+        }
+        // If a single short tap has been waiting for a possible second tap and
+        // the double-click window elapsed with no second tap, send Enter now.
+        if (injector_boot_short_pending &&
+            !IsPttPressed() &&
+            (now_ms - last_injector_boot_release_ms) >= kInjectorBootDoubleClickWindowMs) {
+            injector_boot_short_pending = false;
+            last_injector_boot_release_ms = 0;
+            if (SendEnter()) {
+                status_text_ = "已发送回车";
+                hint_text_ = "短按 BOOT 回车";
+                phase_ = Phase::Idle;
+            } else {
+                status_text_ = "回车失败";
+                hint_text_ = "检查连接";
+                phase_ = Phase::Error;
+            }
+            UpdateDisplay();
+        }
         if (connect_attempt_completed_.exchange(false, std::memory_order_acq_rel)) {
             reconnect_stuck_prompt_ = false;
             if (IsServerConnected()) {
@@ -3463,6 +3532,8 @@ void LanMicApp::Run() {
             awaiting_pong_baseline_ms = 0;
             todo_boot_short_pending = false;
             last_todo_boot_release_ms = 0;
+            injector_boot_short_pending = false;
+            last_injector_boot_release_ms = 0;
             UpdateDisplay();
         }
         if ((now_ms - last_battery_poll_ms) >= kBatteryPollIntervalMs) {
@@ -3507,27 +3578,6 @@ void LanMicApp::Run() {
                 todo_menu_open_ = false;
             }
             SwitchPage(active_page_ == Page::Todo ? Page::Summary : Page::Todo);
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        if (down_double_click &&
-            !todo_menu_open_ &&
-            !has_pending_transcript_ &&
-            voice_mode_ == VoiceMode::Normal &&
-            active_page_ == Page::Summary &&
-            (phase_ == Phase::Idle || phase_ == Phase::Running)) {
-            if (IsServerConnected()) {
-                SendAction("action_undo");
-            } else {
-                disconnected_since_ms = now_ms;
-                reconnect_interval_ms = kReconnectIntervalMinMs;
-                last_reconnect_ms = now_ms;
-                StartConnectAttemptAsync();
-                status_text_ = "连接中";
-                hint_text_ = "正在重试主机...";
-                UpdateDisplay();
-            }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
@@ -3735,7 +3785,7 @@ void LanMicApp::Run() {
             !plan_options_.empty();
 
         if (up_click) {
-            if (has_pending_transcript_) {
+            if (has_pending_transcript_ && send_target_ != "text_injector") {
                 if (IsServerConnected()) {
                     SendAction("action_send");
                 } else {
@@ -3760,12 +3810,7 @@ void LanMicApp::Run() {
             }
         }
         if (down_click) {
-            const bool normal_mode_undo =
-                !has_pending_transcript_ &&
-                voice_mode_ == VoiceMode::Normal &&
-                active_page_ == Page::Summary &&
-                (phase_ == Phase::Idle || phase_ == Phase::Running);
-            if (has_pending_transcript_ || normal_mode_undo) {
+            if (has_pending_transcript_ && send_target_ != "text_injector") {
                 if (IsServerConnected()) {
                     SendAction("action_undo");
                 } else {
@@ -3913,14 +3958,29 @@ void LanMicApp::Run() {
                        IsServerConnected() &&
                        send_target_ == "text_injector" &&
                        voice_mode_ == VoiceMode::Normal) {
-                if (SendEnter()) {
-                    status_text_ = "已发送回车";
-                    hint_text_ = "短按 BOOT 回车";
-                    phase_ = Phase::Idle;
+                // Short tap on BOOT in text_injector normal mode. Defer the
+                // Enter so a quick second tap can be interpreted as a
+                // double-click → clear the focused input field.
+                const int64_t elapsed_since_last_release = now_ms - last_injector_boot_release_ms;
+                if (injector_boot_short_pending &&
+                    elapsed_since_last_release <= kInjectorBootDoubleClickWindowMs) {
+                    injector_boot_short_pending = false;
+                    last_injector_boot_release_ms = 0;
+                    if (SendClearInput()) {
+                        status_text_ = "已清空输入";
+                        hint_text_ = "连按两次 BOOT 清空";
+                        phase_ = Phase::Idle;
+                    } else {
+                        status_text_ = "清空失败";
+                        hint_text_ = "检查连接";
+                        phase_ = Phase::Error;
+                    }
                 } else {
-                    status_text_ = "回车失败";
-                    hint_text_ = "检查连接";
-                    phase_ = Phase::Error;
+                    injector_boot_short_pending = true;
+                    last_injector_boot_release_ms = now_ms;
+                    status_text_ = "短按 BOOT";
+                    hint_text_ = "再按一次清空";
+                    phase_ = Phase::Idle;
                 }
                 UpdateDisplay();
             } else if (active_page_ == Page::Todo &&

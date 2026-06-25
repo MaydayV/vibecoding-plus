@@ -57,6 +57,7 @@ actor TodoService {
     private var lastActionText: String = ""
     private let storagePath: String
     private var onChange: (() -> Void)?
+    private var pendingReminderList: String? = nil
 
     // MARK: - Init
 
@@ -79,7 +80,7 @@ actor TodoService {
 
     // MARK: - CRUD
 
-    func create(title: String, dueAt: String? = nil) -> TodoItemData {
+    func create(title: String, dueAt: String? = nil, reminderList: String? = nil) -> TodoItemData {
         let now = epochMs()
         let item = TodoItemData(
             id: makeId(),
@@ -97,6 +98,7 @@ actor TodoService {
         items.append(item)
         selectedIndex = items.count - 1
         lastActionText = "已添加计划 \(items.count)"
+        pendingReminderList = reminderList
         save()
         emitChange()
         return item
@@ -121,10 +123,19 @@ actor TodoService {
     }
 
     func toggle(id: String? = nil, index: Int? = nil, completed: Bool) {
-        guard let resolvedIndex = tryResolveIndex(id: id, index: index) else { return }
         let now = epochMs()
 
-        if completed {
+        if !completed, let id, let archiveIndex = archiveItems.firstIndex(where: { $0.id == id }) {
+            var item = archiveItems.remove(at: archiveIndex)
+            item.completed = false
+            item.completedAt = nil
+            item.updatedAt = now
+            item.source = "local"
+            item.dirty = true
+            items.append(item)
+            selectedIndex = items.count - 1
+            lastActionText = "已恢复计划"
+        } else if let resolvedIndex = tryResolveIndex(id: id, index: index), completed {
             // Move to archive
             var item = items.remove(at: resolvedIndex)
             item.completed = true
@@ -134,7 +145,7 @@ actor TodoService {
             item.dirty = true
             archiveItems.insert(item, at: 0)
             lastActionText = "已完成计划 \(resolvedIndex + 1)"
-        } else {
+        } else if let resolvedIndex = tryResolveIndex(id: id, index: index) {
             // Restore from archive — find by id
             let targetId = id ?? (index != nil ? nil : items.indices.contains(selectedIndex) ? items[selectedIndex].id : nil)
             if let targetId, let archiveIndex = archiveItems.firstIndex(where: { $0.id == targetId }) {
@@ -165,13 +176,17 @@ actor TodoService {
 
     @discardableResult
     func delete(id: String? = nil, index: Int? = nil) -> [TodoItemData] {
+        if let id, let archiveIndex = archiveItems.firstIndex(where: { $0.id == id }) {
+            let removed = archiveItems.remove(at: archiveIndex)
+            lastActionText = "已删除归档计划"
+            save()
+            emitChange()
+            return [removed]
+        }
+
         guard let resolvedIndex = tryResolveIndex(id: id, index: index) else { return [] }
         let removed = items.remove(at: resolvedIndex)
-        if items.isEmpty {
-            selectedIndex = -1
-        } else {
-            selectedIndex = min(resolvedIndex, items.count - 1)
-        }
+        selectedIndex = items.isEmpty ? -1 : min(resolvedIndex, items.count - 1)
         lastActionText = "已删除计划 \(resolvedIndex + 1)"
         save()
         emitChange()
@@ -222,8 +237,14 @@ actor TodoService {
         return items.filter { idSet.contains($0.id) && ($0.appleId?.isEmpty == false) }
     }
 
+    func consumePendingReminderList() -> String? {
+        let value = pendingReminderList
+        pendingReminderList = nil
+        return value
+    }
+
     func getDirtySyncItems() -> [TodoItemData] {
-        items.filter { item in
+        (items + archiveItems).filter { item in
             let src = item.source ?? "local"
             if src == "seed" { return false }
             guard let appleId = item.appleId, !appleId.isEmpty else {
@@ -315,13 +336,14 @@ actor TodoService {
 
     func markItemSynced(id: String, appleId: String) {
         let now = epochMs()
+        var changed = false
         if let idx = items.firstIndex(where: { $0.id == id }) {
             items[idx].appleId = appleId
             items[idx].source = "apple"
             items[idx].syncUpdatedAt = now
             items[idx].dirty = false
             save()
-            return
+            changed = true
         }
         if let idx = archiveItems.firstIndex(where: { $0.id == id }) {
             archiveItems[idx].appleId = appleId
@@ -329,6 +351,10 @@ actor TodoService {
             archiveItems[idx].syncUpdatedAt = now
             archiveItems[idx].dirty = false
             save()
+            changed = true
+        }
+        if changed {
+            emitChange()
         }
     }
 
@@ -348,6 +374,7 @@ actor TodoService {
         clampSelectedIndex()
         lastActionText = "苹果待办已同步"
         save()
+        emitChange()
     }
 
     // MARK: - Persistence

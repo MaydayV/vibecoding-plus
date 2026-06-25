@@ -9,7 +9,7 @@ struct RemindersSyncStatus: Sendable {
     var listName: String
     var pollSec: Int
     var busy: Bool
-    var lastSyncAt: String
+    var lastSyncAt: Double
     var lastError: String
     var syncCount: Int
 }
@@ -21,7 +21,7 @@ actor RemindersSync {
     private let store = EKEventStore()
     private var syncTimer: Timer?
     private var syncCount: Int = 0
-    private var lastSyncAt: String = ""
+    private var lastSyncAt: Double = 0
     private var lastError: String = ""
     private var isSyncing: Bool = false
     private var authorized: Bool = false
@@ -112,14 +112,22 @@ actor RemindersSync {
 
     // MARK: - Sync Operations
 
-    func sync(todoService: TodoService, config: ServerConfig) async {
+    func sync(todoService: TodoService, config: ServerConfig, overrideList: String? = nil) async {
         guard !isSyncing else { return }
         isSyncing = true
 
         do {
-            try await pushLocalChanges(todoService: todoService, config: config)
+            if !authorized {
+                let granted = try await requestAccess()
+                guard granted else {
+                    lastError = "未授权访问提醒事项"
+                    isSyncing = false
+                    return
+                }
+            }
+            try await pushLocalChanges(todoService: todoService, config: config, overrideList: overrideList)
             try await pullRemoteChanges(todoService: todoService, config: config)
-            lastSyncAt = isoNow()
+            lastSyncAt = Date().timeIntervalSince1970 * 1000
             lastError = ""
             syncCount += 1
         } catch {
@@ -205,9 +213,11 @@ actor RemindersSync {
 
     // MARK: - Private: Push Local Changes
 
-    private func pushLocalChanges(todoService: TodoService, config: ServerConfig) async throws {
+    private func pushLocalChanges(todoService: TodoService, config: ServerConfig, overrideList: String? = nil) async throws {
         let dirtyItems = await todoService.getDirtySyncItems()
         guard !dirtyItems.isEmpty else { return }
+
+        let defaultList = overrideList ?? (config.remindersListName.isEmpty ? nil : config.remindersListName)
 
         for item in dirtyItems {
             do {
@@ -222,7 +232,7 @@ actor RemindersSync {
                     let newId = try createReminder(
                         title: item.title,
                         dueDate: parseIsoDate(item.dueAt),
-                        listName: config.remindersListName.isEmpty ? nil : config.remindersListName
+                        listName: defaultList
                     )
                     await todoService.markItemSynced(id: item.id, appleId: newId)
                 }
@@ -290,14 +300,14 @@ actor RemindersSync {
     private func resolveCalendars(for listName: String?) -> [EKCalendar] {
         let all = store.calendars(for: .reminder)
         guard let listName, !listName.isEmpty else { return all }
-        return all.filter { $0.title.caseInsensitiveCompare(listName) == .orderedSame }
+        let matched = all.filter {
+            $0.calendarIdentifier == listName ||
+            $0.title.caseInsensitiveCompare(listName) == .orderedSame
+        }
+        return matched.isEmpty ? all : matched
     }
 
     // MARK: - Private: Date Helpers
-
-    private func isoNow() -> String {
-        isoFromDate(Date())
-    }
 
     private func isoFromDate(_ date: Date) -> String {
         ISO8601DateFormatter().string(from: date)

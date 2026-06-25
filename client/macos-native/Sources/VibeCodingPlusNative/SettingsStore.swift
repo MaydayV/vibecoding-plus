@@ -19,6 +19,7 @@ struct SettingsStore {
         config.textInjectionMode = values["TEXT_INJECTION_MODE"] ?? config.textInjectionMode
         config.openaiApiKey = values["OPENAI_API_KEY"] ?? ""
         config.openaiModel = values["OPENAI_TRANSCRIBE_MODEL"] ?? config.openaiModel
+        config.openaiBaseUrl = values["OPENAI_BASE_URL"] ?? values["OPENAI_API_BASE"] ?? ""
         config.volcengineAppKey = values["VOLCENGINE_APP_KEY"] ?? ""
         config.volcengineAccessKey = values["VOLCENGINE_ACCESS_KEY"] ?? ""
         config.whisperCppModelPath = values["WHISPER_CPP_MODEL_PATH"] ?? ""
@@ -80,6 +81,7 @@ struct SettingsStore {
         values["TEXT_INJECTION_MODE"] = config.textInjectionMode
         values["OPENAI_API_KEY"] = nilIfEmpty(config.openaiApiKey)
         values["OPENAI_TRANSCRIBE_MODEL"] = nilIfEmpty(config.openaiModel)
+        values["OPENAI_BASE_URL"] = nilIfEmpty(config.openaiBaseUrl)
         values["VOLCENGINE_APP_KEY"] = nilIfEmpty(config.volcengineAppKey)
         values["VOLCENGINE_ACCESS_KEY"] = nilIfEmpty(config.volcengineAccessKey)
         values["WHISPER_CPP_MODEL_PATH"] = nilIfEmpty(config.whisperCppModelPath)

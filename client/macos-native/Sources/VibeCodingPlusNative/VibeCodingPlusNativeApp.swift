@@ -14,6 +14,7 @@ struct VibeCodingPlusNativeApp: App {
                     appDelegate.appState = state
                     await state.bootstrap()
                     appDelegate.refreshStatusMenu()
+                    appDelegate.configureWindows()
                     registerGlobalShortcut()
                 }
                 .onChange(of: state.serviceRunning) { _, _ in

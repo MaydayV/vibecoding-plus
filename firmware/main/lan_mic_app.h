@@ -186,6 +186,7 @@ private:
     bool SendPttStart();
     bool SendPttStop();
     bool SendEnter();
+    bool SendClearInput();
     bool SendAction(const char* action_type);
     bool SendSetMode(const char* mode);
     bool SendTodoCommand(const char* action, int index = 0, int completed = -1, const char* id = nullptr);

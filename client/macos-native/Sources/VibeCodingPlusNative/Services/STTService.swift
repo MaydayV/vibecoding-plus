@@ -110,7 +110,11 @@ struct STTService {
         }
 
         let model = config.openaiModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseURL = (ProcessInfo.processInfo.environment["OPENAI_BASE_URL"] ?? "https://api.openai.com/v1")
+        // Base URL precedence: explicit config field > env var > official OpenAI endpoint.
+        let configuredBase = config.openaiBaseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let envBase = ProcessInfo.processInfo.environment["OPENAI_BASE_URL"]
+            ?? ProcessInfo.processInfo.environment["OPENAI_API_BASE"]
+        let baseURL = (configuredBase.isEmpty ? (envBase ?? "https://api.openai.com/v1") : configuredBase)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
         let url = URL(string: "\(baseURL)/audio/transcriptions")!

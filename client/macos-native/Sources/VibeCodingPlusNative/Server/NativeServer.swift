@@ -117,6 +117,9 @@ actor NativeServer {
         isRunning = true
 
         todoService = await .create(storagePath: config.todoListPath)
+        await todoService.setOnChange { [weak self] in
+            Task { await self?.broadcastTodoState() }
+        }
         try await wsServer.start(port: UInt16(config.port))
         wireWebSocketCallbacks()
 
@@ -197,8 +200,9 @@ actor NativeServer {
         return convertSnapshot(snap)
     }
 
-    func createTodo(title: String, dueAt: String?) async -> TodoSnapshot {
-        _ = await todoService.create(title: title, dueAt: dueAt)
+    func createTodo(title: String, dueAt: String?, reminderList: String? = nil) async -> TodoSnapshot {
+        _ = await todoService.create(title: title, dueAt: dueAt, reminderList: reminderList)
+        await syncTodosIfEnabled()
         let snap = await todoService.getSnapshot()
         return convertSnapshot(snap)
     }
@@ -210,12 +214,19 @@ actor NativeServer {
         if title != nil || dueAt != nil {
             await todoService.update(id: id, index: index, title: title, dueAt: dueAt)
         }
+        await syncTodosIfEnabled()
         let snap = await todoService.getSnapshot()
         return convertSnapshot(snap)
     }
 
     func deleteTodo(id: String?, index: Int?) async -> TodoSnapshot {
-        _ = await todoService.delete(id: id, index: index)
+        let removed = await todoService.delete(id: id, index: index)
+        for item in removed {
+            if let appleId = item.appleId, !appleId.isEmpty {
+                try? await remindersSync.deleteReminder(appleId: appleId)
+            }
+        }
+        await syncTodosIfEnabled()
         let snap = await todoService.getSnapshot()
         return convertSnapshot(snap)
     }
@@ -244,6 +255,10 @@ actor NativeServer {
         broadcastDisplayConfig()
     }
 
+    func forceDisplayRefresh() {
+        broadcastJson(["type": "force_refresh"])
+    }
+
     func getSyncStatus() async -> [String: Any] {
         let status = await remindersSync.getStatus(config: config)
         return [
@@ -258,10 +273,31 @@ actor NativeServer {
 
     func runSyncNow() async {
         await remindersSync.sync(todoService: todoService, config: config)
+        await broadcastTodoState()
+    }
+
+    private func syncTodosIfEnabled() async {
+        guard config.remindersSyncEnabled else { return }
+        let override = await todoService.consumePendingReminderList()
+        await remindersSync.sync(todoService: todoService, config: config, overrideList: override)
+        await broadcastTodoState()
     }
 
     func getReminderLists() async -> [ReminderListInfo] {
-        await remindersSync.getReminderLists()
+        _ = try? await remindersSync.requestAccess()
+        return await remindersSync.getReminderListsWithCounts()
+    }
+
+    func updateReminderSyncConfig(enabled: Bool, list: String, pollSec: Int) async {
+        config.remindersSyncEnabled = enabled
+        config.remindersListName = list
+        config.remindersPollSec = max(5, pollSec)
+        if enabled {
+            await remindersSync.startPeriodicSync(todoService: todoService, config: config)
+        } else {
+            await remindersSync.stopPeriodicSync()
+        }
+        await broadcastTodoState()
     }
 
     nonisolated func triggerDiscovery(config: ServerConfig) {
@@ -312,8 +348,27 @@ actor NativeServer {
 
         case "action_enter":
             guard ensureAuthenticated(connId, conn: conn) else { return }
-            try? await textInjector.inject("", mode: .typeAndEnter, dryRun: config.dryRunTextInjection)
-            sendJson(to: conn, ["type": "status", "status": "typed", "text": ""])
+            do {
+                try await textInjector.pressReturn(dryRun: config.dryRunTextInjection)
+                sendJson(to: conn, ["type": "status", "status": "typed", "text": ""])
+            } catch {
+                sendJson(to: conn, ["type": "status", "status": "input_error", "message": error.localizedDescription])
+            }
+
+        case "action_clear_input":
+            guard ensureAuthenticated(connId, conn: conn) else { return }
+            do {
+                try await textInjector.clearInput(dryRun: config.dryRunTextInjection)
+                var state = clientStates[connId] ?? ClientState()
+                state.injectedSegments.removeAll()
+                state.pendingTranscript = ""
+                state.pendingSegments = []
+                clientStates[connId] = state
+                sendJson(to: conn, ["type": "status", "status": "input_cleared", "text": ""])
+            } catch {
+                sendJson(to: conn, ["type": "status", "status": "input_error", "message": error.localizedDescription])
+                appendServiceLog("清空输入失败: \(error.localizedDescription)")
+            }
 
         case "set_target":
             guard ensureAuthenticated(connId, conn: conn) else { return }
@@ -402,11 +457,20 @@ actor NativeServer {
 
         state.authenticated = true
         clientStates[connId] = state
+        // Mark the connection authenticated so broadcastAuthenticated() delivers
+        // pushed state (display_config, force_refresh, todo_state, cli_state, ...).
+        // Without this, only direct sends on hello reach the device and later
+        // broadcasts are silently dropped — which is why save/refresh had no
+        // effect until a service restart forced a reconnect.
+        var md = conn.metadata
+        md["authenticated"] = true
+        conn.metadata = md
 
         sendJson(to: conn, ["type": "hello_ack", "deviceId": state.deviceId])
         emitServerReady(to: conn)
         broadcastDisplayConfig(to: conn)
         emitCliSnapshot(to: conn)
+        await emitTodoState(to: conn)
 
         // Broadcast device_event to all other connected clients
         broadcastJson([
@@ -490,6 +554,7 @@ actor NativeServer {
             ])
             return
         }
+        onTranscript?(trimmed)
 
         let voiceMode = resolveVoiceMode(state)
 
@@ -508,7 +573,15 @@ actor NativeServer {
             return
         }
 
-        let deliveryMode = state.segmentTranscriptDeliveryMode ?? config.transcriptDeliveryMode
+        // text_injector always auto-injects on release (immediate). The
+        // confirm_on_device delivery mode is only meaningful for codex/claude
+        // targets, so force immediate here regardless of the config setting.
+        let deliveryMode: String
+        if config.sendTarget == "text_injector" {
+            deliveryMode = "immediate"
+        } else {
+            deliveryMode = state.segmentTranscriptDeliveryMode ?? config.transcriptDeliveryMode
+        }
 
         // Confirm-on-device: hold text, wait for action_send
         if deliveryMode == "confirm_on_device" {
@@ -535,7 +608,20 @@ actor NativeServer {
         ])
 
         let injectionMode = state.segmentTextInjectionMode ?? config.textInjectionMode
-        await dispatchTranscript(trimmed, injectionMode: injectionMode, connId: connId)
+        if config.sendTarget == "text_injector" {
+            cliView.latestUserText = trimmed
+            cliView.latestAssistantText = ""
+            cliView.statusLine = "Typed to focused app"
+            broadcastCliSummary()
+            broadcastCliState()
+        }
+        do {
+            try await dispatchTranscript(trimmed, injectionMode: injectionMode, connId: connId)
+        } catch {
+            sendJson(to: conn, ["type": "status", "status": "input_error", "message": error.localizedDescription])
+            appendServiceLog("输入失败: \(error.localizedDescription)")
+            return
+        }
 
         state.injectedSegments.append(trimmed)
         state.pendingSegments = []
@@ -572,7 +658,9 @@ actor NativeServer {
                 sendJson(to: conn, ["type": "status", "status": "cli_busy"])
                 return
             }
-            print("[NativeServer] dispatchPrompt error: \(error.localizedDescription)")
+            appendServiceLog("输入失败: \(error.localizedDescription)")
+            sendJson(to: conn, ["type": "status", "status": "input_error", "message": error.localizedDescription])
+            return
         }
 
         if voiceMode == "normal" && config.sendTarget == "text_injector" {
@@ -755,6 +843,52 @@ actor NativeServer {
         }
     }
 
+    /// Called from the macOS app when the user changes the send target in the settings UI.
+    func updateSendTarget(_ newTarget: String) {
+        guard config.sendTarget != newTarget else { return }
+        appendServiceLog("发送目标切换: \(config.sendTarget) → \(newTarget)")
+        config.sendTarget = newTarget
+        broadcastServerReady()
+    }
+
+    /// Called from the macOS app when runtime input settings change without a full restart.
+    func updateRuntimeInput(sendTarget: String, deliveryMode: String, injectionMode: String) {
+        let validTargets: Set<String> = ["text_injector", "codex_exec", "claude_code"]
+        let nextTarget = validTargets.contains(sendTarget) ? sendTarget : config.sendTarget
+        let nextDelivery = deliveryMode == "immediate" ? "immediate" : "confirm_on_device"
+        let nextInjection = injectionMode == "type_only" ? "type_only" : "type_and_enter"
+
+        guard config.sendTarget != nextTarget ||
+              config.transcriptDeliveryMode != nextDelivery ||
+              config.textInjectionMode != nextInjection else { return }
+
+        appendServiceLog("输入配置切换: target=\(nextTarget), delivery=\(nextDelivery), injection=\(nextInjection)")
+        config.sendTarget = nextTarget
+        config.transcriptDeliveryMode = nextDelivery
+        config.textInjectionMode = nextInjection
+        broadcastServerReady()
+    }
+
+    /// Allows the macOS client to switch a connected device between coding and todo voice modes.
+    func setDeviceVoiceMode(deviceId: String, mode: String) async {
+        let nextMode = mode == "todo" ? "todo" : "normal"
+        var changed = false
+
+        for (connId, var state) in clientStates where state.deviceId == deviceId {
+            state.voiceMode = nextMode
+            clientStates[connId] = state
+            if let conn = await wsServer.connection(id: connId) {
+                sendJson(to: conn, ["type": "mode_state", "mode": nextMode])
+            }
+            changed = true
+        }
+
+        if changed {
+            appendServiceLog("设备模式切换: \(deviceId) → \(nextMode)")
+            onDeviceEvent?("mode_changed", deviceId, "")
+        }
+    }
+
     private func handleSetMode(_ message: [String: Any], connId: UUID) async {
         guard let conn = await wsServer.connection(id: connId) else { return }
         var state = clientStates[connId] ?? ClientState()
@@ -877,7 +1011,7 @@ actor NativeServer {
     // MARK: - Transcript Dispatch
 
     /// Dispatches text to the appropriate target (injector / codex / claude).
-    private func dispatchTranscript(_ text: String, injectionMode: String, connId: UUID) async {
+    private func dispatchTranscript(_ text: String, injectionMode: String, connId: UUID) async throws {
         switch config.sendTarget {
         case "codex_exec":
             guard !codexSession.isRunning else {
@@ -892,8 +1026,8 @@ actor NativeServer {
             }
             launchClaudePrompt(text)
         default:
-            try? await textInjector.inject(text, mode: injectionMode == "type_only" ? .typeOnly : .typeAndEnter,
-                                            dryRun: config.dryRunTextInjection)
+            try await textInjector.inject(text, mode: injectionMode == "type_only" ? .typeOnly : .typeAndEnter,
+                                          dryRun: config.dryRunTextInjection)
         }
     }
 
@@ -1055,7 +1189,6 @@ actor NativeServer {
             "textInjectionMode": config.textInjectionMode,
             "transcriptDeliveryMode": config.transcriptDeliveryMode,
             "sendTarget": config.sendTarget,
-            "mode": "normal",
             "authRequired": !config.lanSharedSecret.isEmpty,
             "displayTodoRefreshMs": config.displayTodoRefreshMs,
             "displayCodingRefreshMs": config.displayCodingRefreshMs,
@@ -1071,7 +1204,6 @@ actor NativeServer {
                 "textInjectionMode": self.config.textInjectionMode,
                 "transcriptDeliveryMode": self.config.transcriptDeliveryMode,
                 "sendTarget": self.config.sendTarget,
-                "mode": "normal",
                 "authRequired": !self.config.lanSharedSecret.isEmpty,
                 "displayTodoRefreshMs": self.config.displayTodoRefreshMs,
                 "displayCodingRefreshMs": self.config.displayCodingRefreshMs,
@@ -1086,7 +1218,7 @@ actor NativeServer {
             "phase": cliView.phase,
             "statusLine": cliView.statusLine,
             "threadId": cliView.threadId,
-            "repoName": cliView.repoName,
+            "repoName": effectiveRepoLabel,
             "cwd": cliView.cwd
         ]
         broadcastJson(payload)
@@ -1100,22 +1232,31 @@ actor NativeServer {
             "latestAssistantText": cliView.latestAssistantText,
             "statusLine": cliView.statusLine,
             "threadId": cliView.threadId,
-            "repoName": cliView.repoName
+            "repoName": effectiveRepoLabel
         ])
         onCliSummary?(cliView.latestUserText, cliView.latestAssistantText)
     }
 
     func broadcastTodoState() async {
+        let payload = await todoStatePayload()
+        broadcastJson(payload)
+        onTodoStateChange?(payload)
+    }
+
+    private func emitTodoState(to conn: WSConnection) async {
+        let payload = await todoStatePayload()
+        sendJson(to: conn, payload)
+    }
+
+    private func todoStatePayload() async -> [String: Any] {
         let snapshot = await getTodoSnapshot()
-        let payload: [String: Any] = [
+        return [
             "type": "todo_state",
             "items": snapshot.items.map { itemToDict($0) },
             "archiveItems": snapshot.archiveItems.map { itemToDict($0) },
             "selectedIndex": snapshot.selectedIndex,
             "lastActionText": snapshot.lastActionText
         ]
-        broadcastJson(payload)
-        onTodoStateChange?(payload)
     }
 
     func broadcastDisplayConfig(to conn: WSConnection? = nil) {
@@ -1199,6 +1340,9 @@ actor NativeServer {
         conn.onMessage = { [weak self] message in
             Task { await self?.handleWSMessage(message, connId: conn.id) }
         }
+        conn.onPong = { [weak self] in
+            Task { await self?.markConnectionAlive(conn.id) }
+        }
     }
 
     // Called externally by the WebSocket layer when a connection drops
@@ -1225,12 +1369,19 @@ actor NativeServer {
 
     // Route incoming WSMessage to appropriate handler
     private func handleWSMessage(_ message: WSMessage, connId: UUID) async {
+        markConnectionAlive(connId)
         switch message {
         case .text(let text):
             handleTextMessage(text, connId: connId)
         case .binary(let data):
             await handleBinary(data, connId: connId)
         }
+    }
+
+    private func markConnectionAlive(_ connId: UUID) {
+        guard var state = clientStates[connId] else { return }
+        state.missedPings = 0
+        clientStates[connId] = state
     }
 
     // MARK: - Private Helpers
@@ -1260,7 +1411,7 @@ actor NativeServer {
             "phase": cliView.phase,
             "statusLine": cliView.statusLine,
             "threadId": cliView.threadId,
-            "repoName": cliView.repoName,
+            "repoName": effectiveRepoLabel,
             "cwd": cliView.cwd
         ])
         sendJson(to: conn, [
@@ -1269,7 +1420,7 @@ actor NativeServer {
             "latestAssistantText": cliView.latestAssistantText,
             "statusLine": cliView.statusLine,
             "threadId": cliView.threadId,
-            "repoName": cliView.repoName
+            "repoName": effectiveRepoLabel
         ])
         sendJson(to: conn, [
             "type": "cli_log_tail",
@@ -1314,6 +1465,19 @@ actor NativeServer {
         cliView.statusLine = statusLine
         if let threadId { cliView.threadId = threadId }
         broadcastCliState()
+    }
+
+    /// Label broadcast as `repoName` to the device header. Falls back to a
+    /// target-derived name when no real repo name is set, so the e-paper
+    /// header reflects the actual send target instead of a stale "codex".
+    private var effectiveRepoLabel: String {
+        let stored = cliView.repoName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !stored.isEmpty { return stored }
+        switch config.sendTarget {
+        case "claude_code": return "Claude"
+        case "text_injector": return "Inject"
+        default: return "Codex"
+        }
     }
 
     private func appendCliLog(_ line: String) {
