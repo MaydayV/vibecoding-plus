@@ -22,6 +22,7 @@ targets:
         PRODUCT_NAME: VibeCoding Plus
         INFOPLIST_FILE: Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_STANDALONE_ICON_BEHAVIOR: all
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: NO
 schemes:
