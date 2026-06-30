@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		075B3D9C4645FCFCFACCFFF6 /* STTService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54733654901D308D57343C4F /* STTService.swift */; };
+		1048FA4783A159A7ACD26A09 /* MicrophonePermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59252E4614165533ECCB8EB2 /* MicrophonePermission.swift */; };
 		3404843D0462ADCF9D5AE7B9 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8664D9B154FB0CE06F792243 /* Views.swift */; };
 		34F57545DBE953624E9D3107 /* DiscoveryServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55EAB939BC51E95066BA4266 /* DiscoveryServer.swift */; };
 		519DD4A059154AED4C4E3C3F /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47DC063FE3301366C1C8FEAA /* ServerConfig.swift */; };
@@ -16,6 +17,7 @@
 		62CD390FF6307F0BBDA699BB /* WebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 824B4651D7EDE8F937D5A589 /* WebSocketServer.swift */; };
 		7C6CD0D8DE9C9B54B6AF872D /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C974DF24328572829A67953 /* AppState.swift */; };
 		7EF8937854D6186A61399927 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D4AE1A179CEFA9C54CA7B17 /* Models.swift */; };
+		80F65C0A363848196AF6CBD4 /* AccessibilitySupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33FC105FAB70E5373A595E36 /* AccessibilitySupport.swift */; };
 		8D5062EC8F84AD064224D24B /* TodoService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29A2FE6304AC8D694B79E035 /* TodoService.swift */; };
 		8DC0CE2119845CFE6DF45067 /* CLISessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A00A64A1BEB3002D5B2749 /* CLISessionManager.swift */; };
 		936DD66A506024CF80FF5DFD /* LANAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEAD40F7C22916D32AE84FA5 /* LANAuth.swift */; };
@@ -27,6 +29,7 @@
 		C7A72178687EA31719DFDB41 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195B5A4B9AE8D19B2C28EC0C /* AppDelegate.swift */; };
 		D12B2FB25B5790E60F6D6D4F /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85B6FFF1217771E95FD836D7 /* TextInjector.swift */; };
 		E28A7192E8C4912B22FA3664 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568FA0DD62FCBC98B87BAEA5 /* SettingsStore.swift */; };
+		FB6D9972152C277FB41CE260 /* InjectLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7606D091402EE4FBE5235AC6 /* InjectLogger.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -35,10 +38,13 @@
 		251A6D13EA88AEBF798AEAFD /* NativeServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeServer.swift; sourceTree = "<group>"; };
 		251D39D20F6EA1BDDC9D3A5A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		29A2FE6304AC8D694B79E035 /* TodoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoService.swift; sourceTree = "<group>"; };
+		33FC105FAB70E5373A595E36 /* AccessibilitySupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilitySupport.swift; sourceTree = "<group>"; };
 		47DC063FE3301366C1C8FEAA /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
 		54733654901D308D57343C4F /* STTService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = STTService.swift; sourceTree = "<group>"; };
 		55EAB939BC51E95066BA4266 /* DiscoveryServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryServer.swift; sourceTree = "<group>"; };
 		568FA0DD62FCBC98B87BAEA5 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
+		59252E4614165533ECCB8EB2 /* MicrophonePermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophonePermission.swift; sourceTree = "<group>"; };
+		7606D091402EE4FBE5235AC6 /* InjectLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InjectLogger.swift; sourceTree = "<group>"; };
 		824B4651D7EDE8F937D5A589 /* WebSocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServer.swift; sourceTree = "<group>"; };
 		85B6FFF1217771E95FD836D7 /* TextInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjector.swift; sourceTree = "<group>"; };
 		8664D9B154FB0CE06F792243 /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
@@ -69,9 +75,11 @@
 		3F6DFDEB6176981D01E30367 /* VibeCodingPlusNative */ = {
 			isa = PBXGroup;
 			children = (
+				33FC105FAB70E5373A595E36 /* AccessibilitySupport.swift */,
 				195B5A4B9AE8D19B2C28EC0C /* AppDelegate.swift */,
 				9C974DF24328572829A67953 /* AppState.swift */,
 				C328FC676278EF5317D488DD /* EnvironmentChecker.swift */,
+				59252E4614165533ECCB8EB2 /* MicrophonePermission.swift */,
 				9D4AE1A179CEFA9C54CA7B17 /* Models.swift */,
 				568FA0DD62FCBC98B87BAEA5 /* SettingsStore.swift */,
 				C2669562A2E45AC8088F783C /* Shell.swift */,
@@ -87,6 +95,7 @@
 			isa = PBXGroup;
 			children = (
 				C0A00A64A1BEB3002D5B2749 /* CLISessionManager.swift */,
+				7606D091402EE4FBE5235AC6 /* InjectLogger.swift */,
 				100F9937AAED2DAADE9E92A2 /* RemindersSync.swift */,
 				54733654901D308D57343C4F /* STTService.swift */,
 				85B6FFF1217771E95FD836D7 /* TextInjector.swift */,
@@ -200,12 +209,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				80F65C0A363848196AF6CBD4 /* AccessibilitySupport.swift in Sources */,
 				C7A72178687EA31719DFDB41 /* AppDelegate.swift in Sources */,
 				7C6CD0D8DE9C9B54B6AF872D /* AppState.swift in Sources */,
 				8DC0CE2119845CFE6DF45067 /* CLISessionManager.swift in Sources */,
 				34F57545DBE953624E9D3107 /* DiscoveryServer.swift in Sources */,
 				C4C77C75424DFABDF7FEF6AC /* EnvironmentChecker.swift in Sources */,
+				FB6D9972152C277FB41CE260 /* InjectLogger.swift in Sources */,
 				936DD66A506024CF80FF5DFD /* LANAuth.swift in Sources */,
+				1048FA4783A159A7ACD26A09 /* MicrophonePermission.swift in Sources */,
 				7EF8937854D6186A61399927 /* Models.swift in Sources */,
 				C7751CA179417B95775122E9 /* NativeServer.swift in Sources */,
 				B9ED150324A49DFA5B80977B /* RemindersSync.swift in Sources */,

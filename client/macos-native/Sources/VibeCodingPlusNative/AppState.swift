@@ -220,13 +220,22 @@ final class AppState: ObservableObject {
 
     func openPermissions() {
         checker.openPermissions()
-        inlineStatus = "已打开系统设置，请允许辅助功能/自动化/麦克风权限；授权后自动重新检测"
+        inlineStatus = "已打开权限设置并定位当前应用；如弹出麦克风授权，请选择允许"
         Task {
+            let micGranted = await MicrophonePermission.requestIfNeeded()
+            if !micGranted {
+                MicrophonePermission.openSettings()
+            }
             for _ in 0..<8 {
                 try? await Task.sleep(for: .seconds(3))
                 await refreshEnvironment()
             }
         }
+    }
+
+    func revealAppInFinder() {
+        AccessibilitySupport.revealRunningAppInFinder()
+        inlineStatus = "当前应用：\(AccessibilitySupport.runningAppPath)"
     }
 
     func openToolLogin(_ id: String) {

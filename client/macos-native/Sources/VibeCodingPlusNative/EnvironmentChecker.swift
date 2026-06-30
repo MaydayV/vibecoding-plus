@@ -96,22 +96,12 @@ struct EnvironmentChecker {
     }
 
     private func macosPermissionsCheck(config: AppConfig) -> EnvironmentCheck {
-        let accessibility = AXIsProcessTrusted()
+        let accessibility = AccessibilitySupport.isTrusted
         let reminderGranted: Bool = {
             let status = EKEventStore.authorizationStatus(for: .reminder)
             return status == .authorized || status == .fullAccess || status == .writeOnly
         }()
-        let micGranted: Bool = {
-            #if canImport(AVFoundation)
-            if #available(macOS 14.0, *) {
-                return AVAudioApplication.shared.recordPermission == .granted
-            } else {
-                return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-            }
-            #else
-            return false
-            #endif
-        }()
+        let micGranted = MicrophonePermission.isGranted
 
         let needsAccessibility = config.sendTarget == .textInjector
         let needsReminders = config.remindersSyncEnabled
@@ -136,16 +126,16 @@ struct EnvironmentChecker {
 
         let parts: [String] = [
             "辅助功能: \(accessibility ? "已授权" : (needsAccessibility ? "未授权" : "不需要"))",
-            "麦克风: \(micGranted ? "已授权" : "未授权")",
+            "麦克风: \(MicrophonePermission.statusText)",
             "提醒事项: \(reminderGranted ? "已授权" : (needsReminders ? "未授权" : "不需要"))"
         ]
         let version = parts.joined(separator: " · ")
 
         let note: String
         if anyMissing {
-            note = "缺少: \(missing.joined(separator: "、")) — 点击「打开权限」后在系统设置中授权，再点「重新检测」"
+            note = "缺少: \(missing.joined(separator: "、")) — 点「在 Finder 中显示」→ 系统设置辅助功能删除旧条目 → 用 + 重新添加当前应用"
         } else {
-            note = "已授权所需权限；点击「打开权限」可重新检查系统设置"
+            note = "已授权所需权限；重新编译后若输入失效，请重新添加辅助功能授权"
         }
 
         return EnvironmentCheck(
@@ -211,9 +201,8 @@ struct EnvironmentChecker {
     }
 
     func openPermissions() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
+        AccessibilitySupport.openAccessibilitySettings()
+        AccessibilitySupport.revealRunningAppInFinder()
     }
 
     func openToolLogin(_ toolId: String) throws {

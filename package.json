@@ -26,6 +26,7 @@
     "native:generate": "cd client/macos-native && if command -v xcodegen >/dev/null 2>&1; then xcodegen generate; else echo 'xcodegen not found; using checked-in Xcode project'; fi",
     "native:build": "npm run native:generate && cd client/macos-native && xcodebuild -project VibeCodingPlusNative.xcodeproj -scheme VibeCodingPlusNative -configuration Debug -destination 'platform=macOS' build",
     "native:dist:mac": "bash scripts/build-native-mac.sh",
+    "native:install:mac": "bash scripts/install-native-mac.sh",
     "native:open": "open client/macos-native/VibeCodingPlusNative.xcodeproj"
   },
   "keywords": [

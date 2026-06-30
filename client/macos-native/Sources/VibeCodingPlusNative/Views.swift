@@ -533,19 +533,48 @@ struct SettingsView: View {
             PageHeader(eyebrow: "CONFIG", title: "设置", subtitle: state.inlineStatus)
 
             InkPanel(title: "macOS 权限状态", symbol: "checkmark.shield", accent: true) {
-                HStack(spacing: 20) {
-                    permIndicator("辅助功能", granted: AXIsProcessTrusted(), needed: state.config.sendTarget == .textInjector)
-                    permIndicator("麦克风", granted: micPermissionGranted(), needed: true)
-                    permIndicator("提醒事项", granted: reminderPermissionGranted(), needed: state.config.remindersSyncEnabled)
-                    Spacer()
-                    Button { state.openPermissions() } label: {
-                        Label("打开权限", systemImage: "lock.open")
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 20) {
+                        permIndicator("辅助功能", granted: AccessibilitySupport.isTrusted, needed: state.config.sendTarget == .textInjector)
+                        permIndicator("麦克风", granted: micPermissionGranted(), needed: true)
+                        permIndicator("提醒事项", granted: reminderPermissionGranted(), needed: state.config.remindersSyncEnabled)
+                        Spacer()
+                        Button { state.revealAppInFinder() } label: {
+                            Label("在 Finder 中显示", systemImage: "folder")
+                        }
+                        .inkButton()
+                        Button { state.openPermissions() } label: {
+                            Label("打开权限", systemImage: "lock.open")
+                        }
+                        .inkButton()
+                        Button { Task { await state.refreshEnvironment() } } label: {
+                            Label("重新检测", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .inkButton()
                     }
-                    .inkButton()
-                    Button { Task { await state.refreshEnvironment() } } label: {
-                        Label("重新检测", systemImage: "arrow.triangle.2.circlepath")
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("当前运行的应用")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(InkTheme.ink.opacity(0.5))
+                        Text(AccessibilitySupport.runningAppPath)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .lineLimit(2)
                     }
-                    .inkButton()
+
+                    if state.config.sendTarget == .textInjector && !AccessibilitySupport.isTrusted {
+                        Text(AccessibilitySupport.reauthorizeHint)
+                            .font(.caption)
+                            .foregroundStyle(InkTheme.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text("注入诊断日志：~/Library/Application Support/vibecoding-plus/inject.log")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
                 }
             }
 
@@ -761,15 +790,7 @@ private struct UsageKeyRow: View {
 // MARK: - Devices
 
 func micPermissionGranted() -> Bool {
-    #if canImport(AVFoundation)
-    if #available(macOS 14.0, *) {
-        return AVAudioApplication.shared.recordPermission == .granted
-    } else {
-        return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-    }
-    #else
-    return false
-    #endif
+    MicrophonePermission.isGranted
 }
 
 func reminderPermissionGranted() -> Bool {
