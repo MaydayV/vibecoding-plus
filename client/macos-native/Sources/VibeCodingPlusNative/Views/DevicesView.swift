@@ -52,7 +52,7 @@ struct DevicesView: View {
                     .textSelection(.enabled)
             }
             Spacer()
-            Text("设备首次连接后，点「确认配对」下发密钥；NFC 标签写入 vibe:// 链接供碰一碰。")
+            Text("设备连上后点「确认配对」下发密钥。未连 Wi‑Fi 时碰 NFC 进配网；已有 Wi‑Fi 未连 Mac 时碰 NFC 打开手机配对说明页（:8768/pair）。")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: 360, alignment: .leading)
@@ -107,15 +107,10 @@ struct DeviceCard: View {
             Button {
                 Task { await state.provisionDevice(device) }
             } label: {
-                Label("确认配对", systemImage: "key.fill")
+                Label(device.isProvisioned ? "已配对" : "确认配对", systemImage: "key.fill")
             }
             .inkButton()
-            Button {
-                Task { await state.writePairingNfc(for: device) }
-            } label: {
-                Label("写入 NFC", systemImage: "wave.3.right")
-            }
-            .inkButton()
+            .disabled(device.isProvisioned)
             Button {
                 Task { await state.offerFirmware(to: device) }
             } label: {

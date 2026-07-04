@@ -311,7 +311,8 @@ final class AppState: ObservableObject {
                 boardType: dict["boardType"] as? String,
                 voiceMode: dict["voiceMode"] as? String,
                 remoteAddress: dict["remoteAddress"] as? String,
-                connectedAt: dict["connectedAt"] as? Double
+                connectedAt: dict["connectedAt"] as? Double,
+                isProvisioned: dict["isProvisioned"] as? Bool ?? false
             )
         }
         self.serviceStatus = ServiceStatusPayload(
@@ -347,14 +348,19 @@ final class AppState: ObservableObject {
 
     func provisionDevice(_ device: DeviceInfo) async {
         guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
-        await server.provisionSecret(forDeviceId: device.deviceId)
-        inlineStatus = "配对密钥已发送到 \(device.deviceId)"
-    }
-
-    func writePairingNfc(for device: DeviceInfo) async {
-        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
-        await server.writePairingNfc(forDeviceId: device.deviceId)
-        inlineStatus = "NFC 配对 URI 已写入 \(device.deviceId)"
+        if device.isProvisioned {
+            inlineStatus = "设备已配对，无需重复操作"
+            return
+        }
+        guard !config.lanSharedSecret.isEmpty else {
+            inlineStatus = "请先在设置中配置 LAN_SHARED_SECRET"
+            return
+        }
+        let ok = await server.provisionSecret(forDeviceId: device.deviceId)
+        inlineStatus = ok
+            ? "配对密钥已发送到 \(device.deviceId)"
+            : "配对失败：设备未连接或未通过认证"
+        await refreshRuntime()
     }
 
     func offerFirmware(to device: DeviceInfo) async {

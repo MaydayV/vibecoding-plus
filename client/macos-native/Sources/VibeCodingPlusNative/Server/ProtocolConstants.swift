@@ -52,7 +52,6 @@ enum LANServerMessage {
     static let firmware_check = "firmware_check"
     static let firmware_offer = "firmware_offer"
     static let provision_secret = "provision_secret"
-    static let pairing_nfc = "pairing_nfc"
     static let discover_reply = "discover_reply"
 }
 

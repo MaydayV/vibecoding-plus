@@ -46,7 +46,6 @@ server_to_device:
   - firmware_check
   - firmware_offer
   - provision_secret
-  - pairing_nfc
   - discover_reply
 
 send_targets:

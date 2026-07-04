@@ -729,15 +729,12 @@ void LanMicApp::HandleServerMessage(const char* data, size_t len) {
             if (host_id != nullptr && host_id[0] != '\0') {
                 SavePairedHost(host_id, host_name != nullptr ? host_name : "");
             }
-            status_text_ = "已配对";
             hint_text_ = "密钥已保存";
-        }
-    } else if (strcmp(type, LAN_MSG_SERVER_PAIRING_NFC) == 0) {
-        const char* code = GetJsonString(root, "code");
-        if (code != nullptr && code[0] != '\0') {
-            UpdateNfcPairingUri(code);
-            status_text_ = "NFC 配对";
-            hint_text_ = "请碰一碰标签";
+            if (IsServerConnected()) {
+                status_text_ = "就绪";
+            } else {
+                status_text_ = "已配对";
+            }
         }
     }
 

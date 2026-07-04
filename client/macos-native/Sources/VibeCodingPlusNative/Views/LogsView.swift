@@ -1,6 +1,22 @@
 import SwiftUI
+
+private enum LogSection: String, CaseIterable, Identifiable {
+    case cli
+    case service
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .cli: "CLI 事件"
+        case .service: "服务日志"
+        }
+    }
+}
+
 struct LogsView: View {
     @EnvironmentObject private var state: AppState
+    @State private var section: LogSection = .cli
     @State private var cliFilter: LogFilter = .all
     @State private var svcFilter: ServiceLogFilter = .all
 
@@ -8,32 +24,53 @@ struct LogsView: View {
         VStack(alignment: .leading, spacing: 22) {
             PageHeader(eyebrow: "TRACE", title: "日志", subtitle: state.inlineStatus)
 
-            HStack(alignment: .top, spacing: 16) {
-                InkPanel(title: "CLI 事件", symbol: "terminal", accessory: AnyView(
+            InkSegmentedPicker(
+                selection: $section,
+                options: LogSection.allCases,
+                label: { $0.label }
+            )
+            .frame(maxWidth: 320)
+
+            switch section {
+            case .cli:
+                logCard {
                     InkSegmentedPicker(
                         selection: $cliFilter,
                         options: LogFilter.allCases,
                         label: { $0.label }
                     )
-                    .frame(width: 300)
-                )) {
                     LogText(lines: filteredCliLines)
-                        .frame(minHeight: 460)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 480)
                 }
-
-                InkPanel(title: "服务日志", symbol: "server.rack", accessory: AnyView(
+            case .service:
+                logCard {
                     InkSegmentedPicker(
                         selection: $svcFilter,
                         options: ServiceLogFilter.allCases,
                         label: { $0.label }
                     )
-                    .frame(width: 240)
-                )) {
                     LogText(lines: filteredServiceLines)
-                        .frame(minHeight: 460)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 480)
                 }
             }
         }
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func logCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            content()
+        }
+        .padding(18)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(.primary.opacity(0.16), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.05), radius: 16, x: 0, y: 8)
     }
 
     private var filteredCliLines: [String] {

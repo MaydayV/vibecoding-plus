@@ -32,6 +32,7 @@ struct ServerConfig {
     var transcriptDeliveryMode: String = "confirm_on_device"
     var textInjectionMode: String = "type_and_enter"
     var port: Int = 8765
+    var setupPort: Int = 8768
     var discoveryPort: Int = 8766
     var discoveryEnabled: Bool = true
     var bindHost: String = "0.0.0.0"

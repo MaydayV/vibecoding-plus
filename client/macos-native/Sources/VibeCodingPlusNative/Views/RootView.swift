@@ -69,17 +69,12 @@ struct RootView: View {
     var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 208, ideal: 232)
+                .navigationSplitViewColumnWidth(min: 232, ideal: 232, max: 232)
         } detail: {
             ZStack {
                 InkBackground()
-                ScrollView {
-                    content
-                        .padding(.horizontal, 28)
-                        .padding(.top, 22)
-                        .padding(.bottom, 36)
-                        .frame(maxWidth: 1200, alignment: .topLeading)
-                }
+                detailContent
+                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -89,6 +84,7 @@ struct RootView: View {
             .navigationTitle("")
             .toolbarTitleDisplayMode(.inline)
         }
+        .navigationSplitViewStyle(.balanced)
         .tint(InkTheme.accent)
     }
 
@@ -246,6 +242,24 @@ struct RootView: View {
         }
         .buttonStyle(.plain)
         .hoverEffect()
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        let padded = content
+            .padding(.horizontal, 28)
+            .padding(.top, 22)
+            .padding(.bottom, 36)
+            .frame(maxWidth: 1200, alignment: .topLeading)
+
+        if selection == .logs {
+            padded
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            ScrollView {
+                padded
+            }
+        }
     }
 
     @ViewBuilder

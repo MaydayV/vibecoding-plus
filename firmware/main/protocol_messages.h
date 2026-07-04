@@ -47,7 +47,6 @@
 #define LAN_MSG_SERVER_FIRMWARE_CHECK "firmware_check"
 #define LAN_MSG_SERVER_FIRMWARE_OFFER "firmware_offer"
 #define LAN_MSG_SERVER_PROVISION_SECRET "provision_secret"
-#define LAN_MSG_SERVER_PAIRING_NFC "pairing_nfc"
 #define LAN_MSG_SERVER_DISCOVER_REPLY "discover_reply"
 
 #endif

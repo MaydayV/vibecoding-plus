@@ -57,6 +57,9 @@ extern "C" RtcPcf8563* __attribute__((weak)) ZectrixGetRtc();
 #ifndef CONFIG_LAN_SHARED_SECRET
 #define CONFIG_LAN_SHARED_SECRET ""
 #endif
+#ifndef CONFIG_LAN_SETUP_HTTP_PORT
+#define CONFIG_LAN_SETUP_HTTP_PORT 8768
+#endif
 
 void LanMicApp::LoadPersistedNetworkState() {
     Settings nvs(kLanMicNamespace);
@@ -167,23 +170,52 @@ void LanMicApp::UpdateNfcProvisionUri(const std::string& event_hint) {
     }
 }
 
-void LanMicApp::UpdateNfcAdminUri(const std::string& ws_uri) {
-    const std::string admin_url = BuildAdminUrlFromWsUri(ws_uri);
-    if (admin_url.empty()) {
+void LanMicApp::RefreshNfcForOfflineSetup(const std::string& ws_uri, const std::string& pair_url) {
+    if (IsServerConnected()) {
         return;
     }
-    WriteNfcUriIfNeeded(admin_url, "server_connected");
+    const std::string uri = !pair_url.empty() ? pair_url : BuildSetupUrlFromWsUri(ws_uri);
+    if (uri.empty()) {
+        return;
+    }
+    WriteNfcUriIfNeeded(uri, "offline_setup");
 }
 
-void LanMicApp::UpdateNfcPairingUri(const std::string& pairing_code) {
-    if (pairing_code.empty()) {
-        return;
+std::string LanMicApp::BuildSetupUrlFromWsUri(const std::string& ws_uri) const {
+    if (ws_uri.empty()) {
+        return "";
     }
-    std::string uri = "vibe://pair?code=" + pairing_code;
-    if (!paired_host_id_.empty()) {
-        uri += "&hostId=" + paired_host_id_;
+
+    const std::string ws_prefix = "ws://";
+    const std::string wss_prefix = "wss://";
+    bool secure = false;
+    size_t authority_start = 0;
+    if (ws_uri.rfind(ws_prefix, 0) == 0) {
+        secure = false;
+        authority_start = ws_prefix.size();
+    } else if (ws_uri.rfind(wss_prefix, 0) == 0) {
+        secure = true;
+        authority_start = wss_prefix.size();
+    } else if (ws_uri.rfind("http://", 0) == 0 || ws_uri.rfind("https://", 0) == 0) {
+        return ws_uri;
+    } else {
+        return "";
     }
-    WriteNfcUriIfNeeded(uri, "pairing_mode");
+
+    size_t authority_end = ws_uri.find('/', authority_start);
+    if (authority_end == std::string::npos) {
+        authority_end = ws_uri.size();
+    }
+    if (authority_end <= authority_start) {
+        return "";
+    }
+
+    const std::string authority = ws_uri.substr(authority_start, authority_end - authority_start);
+    const size_t colon = authority.find(':');
+    const std::string host = colon == std::string::npos ? authority : authority.substr(0, colon);
+    char port_buffer[16];
+    snprintf(port_buffer, sizeof(port_buffer), "%d", CONFIG_LAN_SETUP_HTTP_PORT);
+    return std::string(secure ? "https://" : "http://") + host + ":" + port_buffer + "/pair";
 }
 
 std::string LanMicApp::GetSharedSecret() const {
@@ -240,38 +272,6 @@ void LanMicApp::WriteNfcUriIfNeeded(const std::string& uri, const char* reason) 
              "NFC uri updated: reason=%s uri=%s",
              reason != nullptr ? reason : "unknown",
              nfc_last_uri_.c_str());
-}
-
-
-std::string LanMicApp::BuildAdminUrlFromWsUri(const std::string& ws_uri) const {
-    if (ws_uri.empty()) {
-        return "";
-    }
-
-    const std::string ws_prefix = "ws://";
-    const std::string wss_prefix = "wss://";
-    bool secure = false;
-    size_t authority_start = 0;
-    if (ws_uri.rfind(ws_prefix, 0) == 0) {
-        secure = false;
-        authority_start = ws_prefix.size();
-    } else if (ws_uri.rfind(wss_prefix, 0) == 0) {
-        secure = true;
-        authority_start = wss_prefix.size();
-    } else {
-        return "";
-    }
-
-    size_t authority_end = ws_uri.find('/', authority_start);
-    if (authority_end == std::string::npos) {
-        authority_end = ws_uri.size();
-    }
-    if (authority_end <= authority_start) {
-        return "";
-    }
-
-    const std::string authority = ws_uri.substr(authority_start, authority_end - authority_start);
-    return std::string(secure ? "https://" : "http://") + authority + "/admin";
 }
 
 
@@ -638,6 +638,10 @@ bool LanMicApp::DiscoverServerUri() {
                     SaveCachedServerUri(server_uri_);
                     SavePairedHost(host_id != nullptr ? host_id : "",
                                    host_name != nullptr ? host_name : "");
+                    const char* pair_url = GetJsonString(response, "pairUrl");
+                    RefreshNfcForOfflineSetup(
+                        server_uri_,
+                        pair_url != nullptr ? std::string(pair_url) : "");
                     status_text_ = "发现主机";
                     hint_text_ = (host_name != nullptr && host_name[0] != '\0') ? host_name : server_uri_;
                     ESP_LOGI(kLanMicTag, "Discovered host: %s (%s)", server_uri_.c_str(), hint_text_.c_str());

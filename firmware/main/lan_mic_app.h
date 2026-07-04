@@ -190,10 +190,9 @@ private:
     void ClearPersistedHost();
     void ClearCachedServerUri();
     void UpdateNfcProvisionUri(const std::string& event_hint);
-    void UpdateNfcAdminUri(const std::string& ws_uri);
-    void UpdateNfcPairingUri(const std::string& pairing_code);
+    void RefreshNfcForOfflineSetup(const std::string& ws_uri, const std::string& pair_url = "");
     void WriteNfcUriIfNeeded(const std::string& uri, const char* reason);
-    std::string BuildAdminUrlFromWsUri(const std::string& ws_uri) const;
+    std::string BuildSetupUrlFromWsUri(const std::string& ws_uri) const;
     void RequestWifiReconfigureByReboot(const char* status_text, const char* hint_text);
     void ConfigureButtons();
     bool IsWifiConnected() const;

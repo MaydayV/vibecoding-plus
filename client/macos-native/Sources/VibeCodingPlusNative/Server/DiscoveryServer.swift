@@ -131,6 +131,7 @@ actor DiscoveryServer {
         let deviceId = (request["deviceId"] as? String) ?? "unknown"
 
         let replyHostName = "\(hostname) · \(replyAddress)"
+        let pairUrl = "http://\(replyAddress):\(config.setupPort)/pair"
         var body: [String: Any] = [
             "type": LANServerMessage.discover_reply,
             "service": serviceTag,
@@ -138,6 +139,7 @@ actor DiscoveryServer {
             "hostName": replyHostName,
             "wsUrl": "ws://\(replyAddress):\(config.port)",
             "wsPort": config.port,
+            "pairUrl": pairUrl,
             "nonce": nonce,
             "deviceId": deviceId,
         ]

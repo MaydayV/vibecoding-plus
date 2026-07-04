@@ -999,6 +999,9 @@ void LanMicApp::Run() {
             network_state_ = IsWifiConnected() ? NetworkState::Wifi : NetworkState::Offline;
             status_text_ = "连接已断开";
             hint_text_ = "将自动重试";
+            if (!cached_server_uri_.empty()) {
+                RefreshNfcForOfflineSetup(cached_server_uri_);
+            }
             phase_ = Phase::Idle;
             if (active_page_ == Page::Todo || offline_todo_mode_) {
                 offline_todo_mode_ = true;

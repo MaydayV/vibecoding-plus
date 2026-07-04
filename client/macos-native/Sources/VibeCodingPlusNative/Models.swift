@@ -124,6 +124,7 @@ struct AppConfig {
     var codexSkipGitRepoCheck: Bool = false
     var claudeDangerouslySkipPermissions: Bool = false
     var port: Int = 8765
+    var setupPort: Int = 8768
     var discoveryHostId: String = "VibeServer"
     var discoveryPort: Int = 8766
     var remindersSyncEnabled: Bool = false
@@ -141,6 +142,7 @@ struct DeviceInfo: Identifiable, Decodable {
     var voiceMode: String?
     var remoteAddress: String?
     var connectedAt: Double?
+    var isProvisioned: Bool = false
 
     var id: String { deviceId }
 }

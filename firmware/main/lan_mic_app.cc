@@ -291,7 +291,6 @@ void LanMicApp::TouchUserInput(int64_t now_ms) {
 void LanMicApp::HandleWsConnected(const std::string& target_uri_text) {
     board_.SetPowerSaveLevel(PowerSaveLevel::BALANCED);
     SaveCachedServerUri(target_uri_text);
-    UpdateNfcAdminUri(target_uri_text);
     network_state_ = NetworkState::Server;
     status_text_ = "已连接";
     hint_text_ = "";
@@ -301,7 +300,7 @@ void LanMicApp::HandleWsConnected(const std::string& target_uri_text) {
     if (display_ != nullptr) {
         display_->RequestUrgentFullRefresh();
     }
-    if (std::strlen(CONFIG_LAN_SHARED_SECRET) == 0) {
+    if (GetSharedSecret().empty()) {
         SendHello();
     }
 }
@@ -324,7 +323,7 @@ void LanMicApp::HandleNetEvent(const PendingNetMessage& message) {
             hint_text_ = CONFIG_LAN_DISCOVERY_ENABLED ? GetDiscoveryHintText() : "连接服务器中...";
             UpdateDisplay();
             if (!cached_server_uri_.empty()) {
-                UpdateNfcAdminUri(cached_server_uri_);
+                RefreshNfcForOfflineSetup(cached_server_uri_);
             }
             break;
         case PendingNetEvent::WifiDisconnected:

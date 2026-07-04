@@ -47,6 +47,7 @@ struct ClientState {
     var planSelectedIndex: Int = -1
     var missedPings: Int = 0
     var authChallengeNonce: String? = nil
+    var provisionCompleted: Bool = false
 }
 
 // MARK: - Constants
@@ -95,6 +96,8 @@ actor NativeServer {
     private var externalWatchTask: Task<Void, Never>?
     private var lastExternalSnapshotSignature = ""
     private let firmwareOtaHost = FirmwareOtaHost()
+    private let setupHttpHost = LanSetupHttpHost()
+    private let setupPageSnapshot = SetupPageSnapshot()
     private var pairingCode: String = ""
     private var firmwareOtaProgress: [String: (phase: String, pct: Int)] = [:]
     private var streamingSttSessions: [UUID: QwenStreamingSTTSession] = [:]
@@ -129,6 +132,7 @@ actor NativeServer {
         isRunning = true
         pairingCode = String(format: "%06d", Int.random(in: 0...999_999))
         config.pairingCode = pairingCode
+        refreshSetupPageSnapshot()
 
         todoService = await .create(storagePath: config.todoListPath)
         await todoService.setOnChange { [weak self] in
@@ -136,6 +140,7 @@ actor NativeServer {
         }
         try await wsServer.start(port: UInt16(config.port))
         wireWebSocketCallbacks()
+        startSetupHttpHost()
 
         // Wire discovery log
         discoveryServer.onLog = { [weak self] msg in
@@ -167,6 +172,7 @@ actor NativeServer {
         await discoveryServer.stop()
         await remindersSync.stopPeriodicSync()
         await wsServer.stop()
+        setupHttpHost.stop()
         firmwareOtaHost.stop()
         clientStates.removeAll()
         usedNonces.removeAll()
@@ -179,12 +185,37 @@ actor NativeServer {
     func restart(with newConfig: ServerConfig) async throws {
         await stop()
         config = newConfig
+        refreshSetupPageSnapshot()
         try await start()
     }
 
     // MARK: - Direct Function Calls (replaces HTTP admin API)
 
     func getPairingCode() -> String { pairingCode }
+
+    func getSetupPageURL(forRemoteIP remoteIP: String) async -> String? {
+        guard let address = await discoveryServer.localAddress(forRemoteIP: remoteIP) else { return nil }
+        return "http://\(address):\(config.setupPort)/pair"
+    }
+
+    private func startSetupHttpHost() {
+        setupHttpHost.infoProvider = { [setupPageSnapshot] in
+            setupPageSnapshot.asInfo()
+        }
+        do {
+            try setupHttpHost.start(port: UInt16(config.setupPort))
+            appendServiceLog("配对页 HTTP 服务: :\(config.setupPort)/pair")
+        } catch {
+            appendServiceLog("配对页 HTTP 启动失败: \(error.localizedDescription)")
+        }
+    }
+
+    private func refreshSetupPageSnapshot() {
+        setupPageSnapshot.hostId = config.discoveryHostId
+        setupPageSnapshot.hostName = ProcessInfo.processInfo.hostName
+        setupPageSnapshot.pairCode = pairingCode
+        setupPageSnapshot.hasSharedSecret = !config.lanSharedSecret.isEmpty
+    }
 
     func offerFirmware(to connId: UUID, binURL: URL) async throws {
         guard let conn = await wsServer.connection(id: connId) else {
@@ -232,11 +263,11 @@ actor NativeServer {
         appendServiceLog("固件 OTA 提供: \(binURL.lastPathComponent) → \(localIP):8767")
     }
 
-    func provisionSecret(to connId: UUID) async {
-        guard let conn = await wsServer.connection(id: connId), ensureAuthenticated(connId, conn: conn) else { return }
+    func provisionSecret(to connId: UUID) async -> Bool {
+        guard let conn = await wsServer.connection(id: connId) else { return false }
         guard !config.lanSharedSecret.isEmpty else {
             appendServiceLog("配对失败: 未配置 LAN_SHARED_SECRET")
-            return
+            return false
         }
         sendJson(to: conn, [
             "type": LANServerMessage.provision_secret,
@@ -244,16 +275,13 @@ actor NativeServer {
             "hostId": config.discoveryHostId,
             "hostName": ProcessInfo.processInfo.hostName,
         ])
+        if var state = clientStates[connId] {
+            state.provisionCompleted = true
+            clientStates[connId] = state
+        }
+        broadcastServerReady(to: conn)
         appendServiceLog("已发送配对密钥 → \(clientStates[connId]?.deviceId ?? "unknown")")
-    }
-
-    func writePairingNfc(to connId: UUID) async {
-        guard let conn = await wsServer.connection(id: connId), ensureAuthenticated(connId, conn: conn) else { return }
-        sendJson(to: conn, [
-            "type": LANServerMessage.pairing_nfc,
-            "code": pairingCode,
-        ])
-        appendServiceLog("NFC 配对 URI 已推送: code=\(pairingCode)")
+        return true
     }
 
     func getFirmwareOtaProgress(for deviceId: String) -> (phase: String, pct: Int)? {
@@ -273,14 +301,9 @@ actor NativeServer {
         try await offerFirmware(to: connId, binURL: binURL)
     }
 
-    func provisionSecret(forDeviceId deviceId: String) async {
-        guard let connId = connId(for: deviceId) else { return }
-        await provisionSecret(to: connId)
-    }
-
-    func writePairingNfc(forDeviceId deviceId: String) async {
-        guard let connId = connId(for: deviceId) else { return }
-        await writePairingNfc(to: connId)
+    func provisionSecret(forDeviceId deviceId: String) async -> Bool {
+        guard let connId = connId(for: deviceId) else { return false }
+        return await provisionSecret(to: connId)
     }
 
     func getDevices() async -> [[String: Any]] {
@@ -296,6 +319,8 @@ actor NativeServer {
             if let conn = await wsServer.connection(id: connId) {
                 dict["remoteAddress"] = conn.remoteAddress
             }
+            dict["isProvisioned"] = !config.lanSharedSecret.isEmpty &&
+                (state.authenticated || state.provisionCompleted)
             devices.append(dict)
         }
         return devices
@@ -308,6 +333,7 @@ actor NativeServer {
             "sendTarget": config.sendTarget,
             "sttProvider": config.resolvedSttProvider,
             "port": config.port,
+            "setupPort": config.setupPort,
             "discoveryEnabled": config.discoveryEnabled
         ]
     }
@@ -544,7 +570,8 @@ actor NativeServer {
         state.deviceId = (message["deviceId"] as? String) ?? "unknown"
         state.boardType = (message["boardType"] as? String) ?? "unknown"
 
-        // Validate auth if shared secret is configured
+        // Validate auth when shared secret is configured; allow unauthenticated hello for first-time pairing.
+        var authenticated = config.lanSharedSecret.isEmpty
         if !config.lanSharedSecret.isEmpty {
             let deviceId = state.deviceId
             let deviceNonce = (message["authNonce"] as? String) ?? ""
@@ -552,48 +579,43 @@ actor NativeServer {
             let sig = (message["authSig"] as? String) ?? ""
             let expectedServerNonce = clientStates[connId]?.authChallengeNonce ?? ""
 
-            guard !deviceNonce.isEmpty, !sig.isEmpty else {
-                closeWithAuthError(conn, connId: connId, error: "auth_missing")
-                return
-            }
+            if deviceNonce.isEmpty || sig.isEmpty {
+                appendServiceLog("待配对设备连接: \(deviceId)")
+                authenticated = false
+            } else {
+                guard !expectedServerNonce.isEmpty, serverNonce == expectedServerNonce else {
+                    closeWithAuthError(conn, connId: connId, error: "auth_challenge_mismatch")
+                    return
+                }
 
-            guard !expectedServerNonce.isEmpty, serverNonce == expectedServerNonce else {
-                closeWithAuthError(conn, connId: connId, error: "auth_challenge_mismatch")
-                return
-            }
+                let cacheKey = "\(deviceId):\(deviceNonce)"
+                guard !recentHelloNonces.keys.contains(cacheKey) else {
+                    closeWithAuthError(conn, connId: connId, error: "auth_replayed")
+                    return
+                }
+                pruneRecentHelloNonces()
+                recentHelloNonces[cacheKey] = Date()
 
-            // Check nonce replay (device nonce)
-            let cacheKey = "\(deviceId):\(deviceNonce)"
-            guard !recentHelloNonces.keys.contains(cacheKey) else {
-                closeWithAuthError(conn, connId: connId, error: "auth_replayed")
-                return
-            }
-            pruneRecentHelloNonces()
-            recentHelloNonces[cacheKey] = Date()
-
-            let secret = config.lanSharedSecret
-            let expected = LANAuth.signHelloChallengePayload(
-                secret: secret,
-                deviceId: deviceId,
-                boardType: state.boardType,
-                serverNonce: serverNonce,
-                deviceNonce: deviceNonce
-            )
-            guard LANAuth.signaturesMatch(expected, sig) else {
-                closeWithAuthError(conn, connId: connId, error: "auth_invalid")
-                return
+                let secret = config.lanSharedSecret
+                let expected = LANAuth.signHelloChallengePayload(
+                    secret: secret,
+                    deviceId: deviceId,
+                    boardType: state.boardType,
+                    serverNonce: serverNonce,
+                    deviceNonce: deviceNonce
+                )
+                guard LANAuth.signaturesMatch(expected, sig) else {
+                    closeWithAuthError(conn, connId: connId, error: "auth_invalid")
+                    return
+                }
+                authenticated = true
             }
         }
 
-        state.authenticated = true
+        state.authenticated = authenticated
         clientStates[connId] = state
-        // Mark the connection authenticated so broadcastAuthenticated() delivers
-        // pushed state (display_config, force_refresh, todo_state, cli_state, ...).
-        // Without this, only direct sends on hello reach the device and later
-        // broadcasts are silently dropped — which is why save/refresh had no
-        // effect until a service restart forced a reconnect.
         var md = conn.metadata
-        md["authenticated"] = true
+        md["authenticated"] = authenticated
         conn.metadata = md
 
         sendJson(to: conn, ["type": LANServerMessage.hello_ack, "deviceId": state.deviceId, "protocolVersion": LANProtocol.version])

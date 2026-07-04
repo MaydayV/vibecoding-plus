@@ -26,6 +26,7 @@
 		62CD390FF6307F0BBDA699BB /* WebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 824B4651D7EDE8F937D5A589 /* WebSocketServer.swift */; };
 		78211D35C4ED109DA33B1784 /* InkComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ACCE1FC0E7B9C1BA7744E37 /* InkComponents.swift */; };
 		7C6CD0D8DE9C9B54B6AF872D /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C974DF24328572829A67953 /* AppState.swift */; };
+		7D2AD39E9FD545DBEAE14B33 /* LanSetupHttpHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A588CBFAF89D8A59385D8201 /* LanSetupHttpHost.swift */; };
 		7EF8937854D6186A61399927 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D4AE1A179CEFA9C54CA7B17 /* Models.swift */; };
 		80F65C0A363848196AF6CBD4 /* AccessibilitySupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33FC105FAB70E5373A595E36 /* AccessibilitySupport.swift */; };
 		8D5062EC8F84AD064224D24B /* TodoService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29A2FE6304AC8D694B79E035 /* TodoService.swift */; };
@@ -100,6 +101,7 @@
 		9D4AE1A179CEFA9C54CA7B17 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		A2ED719E347C01E32BC0465A /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		A3466E45BF61D8C7B55A6449 /* ProtocolConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolConstants.swift; sourceTree = "<group>"; };
+		A588CBFAF89D8A59385D8201 /* LanSetupHttpHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanSetupHttpHost.swift; sourceTree = "<group>"; };
 		BCD4B647CD735411E7CAC1A5 /* QwenStreamingSTTSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenStreamingSTTSession.swift; sourceTree = "<group>"; };
 		C0A00A64A1BEB3002D5B2749 /* CLISessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLISessionManager.swift; sourceTree = "<group>"; };
 		C2669562A2E45AC8088F783C /* Shell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shell.swift; sourceTree = "<group>"; };
@@ -125,6 +127,7 @@
 				55EAB939BC51E95066BA4266 /* DiscoveryServer.swift */,
 				614B14D62E4D31961222A2C4 /* FirmwareOtaHost.swift */,
 				CEAD40F7C22916D32AE84FA5 /* LANAuth.swift */,
+				A588CBFAF89D8A59385D8201 /* LanSetupHttpHost.swift */,
 				251A6D13EA88AEBF798AEAFD /* NativeServer.swift */,
 				A3466E45BF61D8C7B55A6449 /* ProtocolConstants.swift */,
 				47DC063FE3301366C1C8FEAA /* ServerConfig.swift */,
@@ -361,6 +364,7 @@
 				78211D35C4ED109DA33B1784 /* InkComponents.swift in Sources */,
 				EBCA86C0372E7B098A8FC64A /* InkTheme.swift in Sources */,
 				936DD66A506024CF80FF5DFD /* LANAuth.swift in Sources */,
+				7D2AD39E9FD545DBEAE14B33 /* LanSetupHttpHost.swift in Sources */,
 				0FB47BE8249A976C8E2EAFC3 /* LogsView.swift in Sources */,
 				1048FA4783A159A7ACD26A09 /* MicrophonePermission.swift in Sources */,
 				7EF8937854D6186A61399927 /* Models.swift in Sources */,
