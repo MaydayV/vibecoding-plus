@@ -20,16 +20,33 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mac20777.vibecodingplus
         PRODUCT_NAME: VibeCoding Plus
+        PRODUCT_MODULE_NAME: VibeCodingPlusNative
         INFOPLIST_FILE: Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_STANDALONE_ICON_BEHAVIOR: all
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: NO
+  VibeCodingPlusNativeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: VibeCodingPlusNative
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.mac20777.vibecodingplus.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/VibeCoding Plus.app/Contents/MacOS/VibeCoding Plus"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   VibeCodingPlusNative:
     build:
       targets:
         VibeCodingPlusNative: all
+    test:
+      targets:
+        - VibeCodingPlusNativeTests
     run:
       config: Debug
       environmentVariables:

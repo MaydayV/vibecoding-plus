@@ -16,6 +16,8 @@ struct CLIViewState {
     var repoName: String = ""
     var cwd: String = ""
     var maxLogLines: Int = 8
+    var quota5hRemainingPct: Int? = nil
+    var quotaWeekRemainingPct: Int? = nil
 
     mutating func pushLogLine(_ line: String) {
         logLines.append(line)
@@ -44,11 +46,13 @@ struct ClientState {
     var planOptions: [String] = []
     var planSelectedIndex: Int = -1
     var missedPings: Int = 0
+    var authChallengeNonce: String? = nil
 }
 
 // MARK: - Constants
 
 private let keepaliveIntervalMs: UInt64 = 30_000
+private let externalWatchIntervalMs: UInt64 = 2_000
 private let keepaliveMissLimit = 2
 private let minPlausibleEpochMs: Double = 1_577_836_800_000  // 2020-01-01 UTC
 
@@ -88,6 +92,14 @@ actor NativeServer {
     private let maxServiceLogLines = 200
     private var isRunning = false
     private var keepaliveTask: Task<Void, Never>?
+    private var externalWatchTask: Task<Void, Never>?
+    private var lastExternalSnapshotSignature = ""
+    private let firmwareOtaHost = FirmwareOtaHost()
+    private var pairingCode: String = ""
+    private var firmwareOtaProgress: [String: (phase: String, pct: Int)] = [:]
+    private var streamingSttSessions: [UUID: QwenStreamingSTTSession] = [:]
+    private var cliPromptQueue: [(text: String, connId: UUID, injectionMode: String?)] = []
+    private var firmwareCheckContinuations: [String: CheckedContinuation<Bool, Never>] = [:]
 
     // MARK: Callbacks to UI layer (nonisolated for external wiring)
 
@@ -115,6 +127,8 @@ actor NativeServer {
     func start() async throws {
         guard !isRunning else { return }
         isRunning = true
+        pairingCode = String(format: "%06d", Int.random(in: 0...999_999))
+        config.pairingCode = pairingCode
 
         todoService = await .create(storagePath: config.todoListPath)
         await todoService.setOnChange { [weak self] in
@@ -129,6 +143,7 @@ actor NativeServer {
         }
 
         startKeepalive()
+        startExternalCliWatcher()
 
         // Start UDP discovery server. Treat failure as fatal: the e-paper
         // device relies on this listener to replace stale .local/cache targets.
@@ -148,9 +163,11 @@ actor NativeServer {
         isRunning = false
 
         stopKeepalive()
+        stopExternalCliWatcher()
         await discoveryServer.stop()
         await remindersSync.stopPeriodicSync()
         await wsServer.stop()
+        firmwareOtaHost.stop()
         clientStates.removeAll()
         usedNonces.removeAll()
         recentHelloNonces.removeAll()
@@ -167,10 +184,110 @@ actor NativeServer {
 
     // MARK: - Direct Function Calls (replaces HTTP admin API)
 
+    func getPairingCode() -> String { pairingCode }
+
+    func offerFirmware(to connId: UUID, binURL: URL) async throws {
+        guard let conn = await wsServer.connection(id: connId) else {
+            throw URLError(.cannotConnectToHost)
+        }
+        guard ensureAuthenticated(connId, conn: conn) else {
+            throw URLError(.userAuthenticationRequired)
+        }
+        let state = clientStates[connId] ?? ClientState()
+        let remoteIP = conn.remoteAddress.components(separatedBy: ":").first ?? "127.0.0.1"
+        let localIP = await discoveryServer.localAddress(forRemoteIP: remoteIP) ?? "127.0.0.1"
+        let (sha256, size) = try firmwareOtaHost.start(binURL: binURL)
+        let version = binURL.deletingPathExtension().lastPathComponent
+
+        sendJson(to: conn, [
+            "type": LANServerMessage.firmware_check,
+            "version": version,
+            "sha256": sha256,
+            "size": size,
+        ])
+
+        let deviceId = state.deviceId
+        let needUpgrade = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            firmwareCheckContinuations[deviceId] = cont
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                if let pending = firmwareCheckContinuations.removeValue(forKey: deviceId) {
+                    pending.resume(returning: true)
+                }
+            }
+        }
+
+        guard needUpgrade else {
+            appendServiceLog("固件已是最新: \(deviceId) (\(version))")
+            throw NativeServerError.firmwareUpToDate
+        }
+
+        sendJson(to: conn, [
+            "type": LANServerMessage.firmware_offer,
+            "url": "http://\(localIP):8767/firmware.bin",
+            "version": version,
+            "sha256": sha256,
+            "size": size,
+        ])
+        appendServiceLog("固件 OTA 提供: \(binURL.lastPathComponent) → \(localIP):8767")
+    }
+
+    func provisionSecret(to connId: UUID) async {
+        guard let conn = await wsServer.connection(id: connId), ensureAuthenticated(connId, conn: conn) else { return }
+        guard !config.lanSharedSecret.isEmpty else {
+            appendServiceLog("配对失败: 未配置 LAN_SHARED_SECRET")
+            return
+        }
+        sendJson(to: conn, [
+            "type": LANServerMessage.provision_secret,
+            "secret": config.lanSharedSecret,
+            "hostId": config.discoveryHostId,
+            "hostName": ProcessInfo.processInfo.hostName,
+        ])
+        appendServiceLog("已发送配对密钥 → \(clientStates[connId]?.deviceId ?? "unknown")")
+    }
+
+    func writePairingNfc(to connId: UUID) async {
+        guard let conn = await wsServer.connection(id: connId), ensureAuthenticated(connId, conn: conn) else { return }
+        sendJson(to: conn, [
+            "type": LANServerMessage.pairing_nfc,
+            "code": pairingCode,
+        ])
+        appendServiceLog("NFC 配对 URI 已推送: code=\(pairingCode)")
+    }
+
+    func getFirmwareOtaProgress(for deviceId: String) -> (phase: String, pct: Int)? {
+        firmwareOtaProgress[deviceId]
+    }
+
+    func getAllFirmwareOtaProgress() -> [String: (phase: String, pct: Int)] {
+        firmwareOtaProgress
+    }
+
+    func connId(for deviceId: String) -> UUID? {
+        clientStates.first(where: { $0.value.deviceId == deviceId })?.key
+    }
+
+    func offerFirmware(forDeviceId deviceId: String, binURL: URL) async throws {
+        guard let connId = connId(for: deviceId) else { throw URLError(.cannotFindHost) }
+        try await offerFirmware(to: connId, binURL: binURL)
+    }
+
+    func provisionSecret(forDeviceId deviceId: String) async {
+        guard let connId = connId(for: deviceId) else { return }
+        await provisionSecret(to: connId)
+    }
+
+    func writePairingNfc(forDeviceId deviceId: String) async {
+        guard let connId = connId(for: deviceId) else { return }
+        await writePairingNfc(to: connId)
+    }
+
     func getDevices() async -> [[String: Any]] {
         var devices: [[String: Any]] = []
         for (connId, state) in clientStates {
             var dict: [String: Any] = [
+                "connId": connId.uuidString,
                 "deviceId": state.deviceId,
                 "boardType": state.boardType,
                 "voiceMode": state.voiceMode,
@@ -256,7 +373,7 @@ actor NativeServer {
     }
 
     func forceDisplayRefresh() {
-        broadcastJson(["type": "force_refresh"])
+        broadcastJson(["type": LANServerMessage.force_refresh])
     }
 
     func getSyncStatus() async -> [String: Any] {
@@ -314,48 +431,48 @@ actor NativeServer {
         let deviceId = clientStates[connId]?.deviceId ?? "unknown"
 
         // Log all message types except high-frequency ones
-        if type != "ping" && type != "ptt_start" {
+        if type != LANDeviceMessage.ping && type != LANDeviceMessage.ptt_start {
             appendServiceLog("消息: \(deviceId) → \(type)")
         }
 
         switch type {
-        case "hello":
+        case LANDeviceMessage.hello:
             await handleHello(message, from: conn, connId: connId)
 
-        case "ptt_start":
+        case LANDeviceMessage.ptt_start:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handlePttStart(message, connId: connId)
 
-        case "ptt_stop":
+        case LANDeviceMessage.ptt_stop:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handlePttStop(connId: connId)
 
-        case "action_send":
+        case LANDeviceMessage.action_send:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handleActionSend(connId: connId)
 
-        case "action_undo":
+        case LANDeviceMessage.action_undo:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handleActionUndo(connId: connId)
 
-        case "todo_command":
+        case LANDeviceMessage.todo_command:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handleTodoCommand(message, connId: connId)
 
-        case "prompt":
+        case LANDeviceMessage.prompt:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handlePrompt(message, connId: connId)
 
-        case "action_enter":
+        case LANDeviceMessage.action_enter:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             do {
                 try await textInjector.pressReturn(dryRun: config.dryRunTextInjection)
-                sendJson(to: conn, ["type": "status", "status": "typed", "text": ""])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "typed", "text": ""])
             } catch {
-                sendJson(to: conn, ["type": "status", "status": "input_error", "message": error.localizedDescription])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "input_error", "message": error.localizedDescription])
             }
 
-        case "action_clear_input":
+        case LANDeviceMessage.action_clear_input:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             do {
                 try await textInjector.clearInput(dryRun: config.dryRunTextInjection)
@@ -364,37 +481,59 @@ actor NativeServer {
                 state.pendingTranscript = ""
                 state.pendingSegments = []
                 clientStates[connId] = state
-                sendJson(to: conn, ["type": "status", "status": "input_cleared", "text": ""])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "input_cleared", "text": ""])
             } catch {
-                sendJson(to: conn, ["type": "status", "status": "input_error", "message": error.localizedDescription])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "input_error", "message": error.localizedDescription])
                 appendServiceLog("清空输入失败: \(error.localizedDescription)")
             }
 
-        case "set_target":
+        case LANDeviceMessage.set_target:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handleSetTarget(message, connId: connId)
 
-        case "set_mode":
+        case LANDeviceMessage.set_mode:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handleSetMode(message, connId: connId)
 
-        case "set_cli_cwd":
+        case LANDeviceMessage.set_cli_cwd:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handleSetCliCwd(message, connId: connId)
 
-        case "ping":
-            sendJson(to: conn, ["type": "pong", "nowMs": Int(Date().timeIntervalSince1970 * 1000)])
+        case LANDeviceMessage.ping:
+            sendJson(to: conn, ["type": LANServerMessage.pong, "nowMs": Int(Date().timeIntervalSince1970 * 1000)])
 
-        case "plan_select":
+        case LANDeviceMessage.plan_select:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handlePlanSelect(message, connId: connId)
 
-        case "plan_apply":
+        case LANDeviceMessage.plan_apply:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             await handlePlanApply(connId: connId)
 
+        case LANDeviceMessage.firmware_progress:
+            guard ensureAuthenticated(connId, conn: conn) else { return }
+            let phase = (message["phase"] as? String) ?? ""
+            let pct = (message["pct"] as? Int) ?? 0
+            firmwareOtaProgress[deviceId] = (phase, pct)
+            appendServiceLog("OTA \(deviceId): \(phase) \(pct)%")
+
+        case LANDeviceMessage.firmware_result:
+            guard ensureAuthenticated(connId, conn: conn) else { return }
+            let ok = (message["ok"] as? Bool) ?? false
+            let version = (message["version"] as? String) ?? ""
+            let note = (message["message"] as? String) ?? ""
+            firmwareOtaProgress.removeValue(forKey: deviceId)
+            appendServiceLog("OTA 完成 \(deviceId): ok=\(ok) version=\(version) \(note)")
+
+        case LANDeviceMessage.firmware_check_result:
+            guard ensureAuthenticated(connId, conn: conn) else { return }
+            let needUpgrade = (message["needUpgrade"] as? Bool) ?? true
+            if let cont = firmwareCheckContinuations.removeValue(forKey: deviceId) {
+                cont.resume(returning: needUpgrade)
+            }
+
         default:
-            sendJson(to: conn, ["type": "warning", "warning": "unknown_message_type:\(type)"])
+            sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "unknown_message_type:\(type)"])
         }
     }
 
@@ -408,31 +547,23 @@ actor NativeServer {
         // Validate auth if shared secret is configured
         if !config.lanSharedSecret.isEmpty {
             let deviceId = state.deviceId
-            let nonce = (message["authNonce"] as? String) ?? ""
-            // authTs may arrive as JSON number (from firmware) or string
-            let ts: String
-            if let tsNum = message["authTs"] as? NSNumber {
-                ts = tsNum.stringValue
-            } else {
-                ts = (message["authTs"] as? String) ?? ""
-            }
+            let deviceNonce = (message["authNonce"] as? String) ?? ""
+            let serverNonce = (message["authServerNonce"] as? String) ?? ""
             let sig = (message["authSig"] as? String) ?? ""
+            let expectedServerNonce = clientStates[connId]?.authChallengeNonce ?? ""
 
-            guard !nonce.isEmpty, !sig.isEmpty else {
+            guard !deviceNonce.isEmpty, !sig.isEmpty else {
                 closeWithAuthError(conn, connId: connId, error: "auth_missing")
                 return
             }
 
-            // Check timestamp freshness
-            if let tsInt = Int(ts), tsInt >= Int(minPlausibleEpochMs) {
-                guard LANAuth.isFreshTimestamp(tsInt, windowSec: 300) else {
-                    closeWithAuthError(conn, connId: connId, error: "auth_stale")
-                    return
-                }
+            guard !expectedServerNonce.isEmpty, serverNonce == expectedServerNonce else {
+                closeWithAuthError(conn, connId: connId, error: "auth_challenge_mismatch")
+                return
             }
 
-            // Check nonce replay
-            let cacheKey = "\(deviceId):\(nonce)"
+            // Check nonce replay (device nonce)
+            let cacheKey = "\(deviceId):\(deviceNonce)"
             guard !recentHelloNonces.keys.contains(cacheKey) else {
                 closeWithAuthError(conn, connId: connId, error: "auth_replayed")
                 return
@@ -440,14 +571,13 @@ actor NativeServer {
             pruneRecentHelloNonces()
             recentHelloNonces[cacheKey] = Date()
 
-            // Verify signature
             let secret = config.lanSharedSecret
-            let expected = LANAuth.signHelloPayload(
+            let expected = LANAuth.signHelloChallengePayload(
                 secret: secret,
                 deviceId: deviceId,
                 boardType: state.boardType,
-                nonce: nonce,
-                timestamp: ts
+                serverNonce: serverNonce,
+                deviceNonce: deviceNonce
             )
             guard LANAuth.signaturesMatch(expected, sig) else {
                 closeWithAuthError(conn, connId: connId, error: "auth_invalid")
@@ -466,7 +596,7 @@ actor NativeServer {
         md["authenticated"] = true
         conn.metadata = md
 
-        sendJson(to: conn, ["type": "hello_ack", "deviceId": state.deviceId])
+        sendJson(to: conn, ["type": LANServerMessage.hello_ack, "deviceId": state.deviceId, "protocolVersion": LANProtocol.version])
         emitServerReady(to: conn)
         broadcastDisplayConfig(to: conn)
         emitCliSnapshot(to: conn)
@@ -474,7 +604,7 @@ actor NativeServer {
 
         // Broadcast device_event to all other connected clients
         broadcastJson([
-            "type": "device_event",
+            "type": LANServerMessage.device_event,
             "event": "connected",
             "deviceId": state.deviceId,
             "boardType": state.boardType
@@ -504,8 +634,20 @@ actor NativeServer {
         state.audioBytes = 0
         clientStates[connId] = state
 
+        if sttService.resolveProvider() == .qwenAsr && config.mockTranscript.isEmpty {
+            do {
+                let session = QwenStreamingSTTSession(config: config)
+                try await session.start { [weak self] partial in
+                    Task { await self?.sendTranscriptPartial(partial, connId: connId) }
+                }
+                streamingSttSessions[connId] = session
+            } catch {
+                appendServiceLog("流式 STT 启动失败: \(error.localizedDescription)")
+            }
+        }
+
         if let conn = await wsServer.connection(id: connId) {
-            sendJson(to: conn, ["type": "status", "status": "recording"])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "recording"])
         }
     }
 
@@ -513,7 +655,36 @@ actor NativeServer {
         guard let conn = await wsServer.connection(id: connId) else { return }
         var state = clientStates[connId] ?? ClientState()
 
-        let pcmBuffer = Data(state.chunks.flatMap { $0 })
+        if let session = streamingSttSessions.removeValue(forKey: connId) {
+            state.segmentActive = false
+            clientStates[connId] = state
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "transcribing"])
+            let startedAt = Date()
+            let transcript: String
+            if !config.mockTranscript.isEmpty {
+                transcript = config.mockTranscript
+            } else {
+                do {
+                    transcript = try await session.finish()
+                } catch {
+                    appendServiceLog("流式 STT 错误: \(error.localizedDescription)")
+                    session.cancel()
+                    sendJson(to: conn, ["type": LANServerMessage.status, "status": "transcript_empty"])
+                    return
+                }
+            }
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+            appendServiceLog("STT(流式) [\("\(latencyMs)ms")]: \(trimmed.prefix(60))")
+            await deliverTranscript(trimmed, latencyMs: latencyMs, connId: connId, conn: conn, state: state)
+            return
+        }
+
+        let pcmBuffer = state.chunks.reduce(into: Data(capacity: state.audioBytes)) { buffer, chunk in
+            buffer.append(chunk)
+        }
+        let provider = sttService.resolveProvider()
+        appendServiceLog("STT 实际提供商: \(provider.rawValue)")
         state.segmentActive = false
         state.chunks = []
         state.audioBytes = 0
@@ -521,11 +692,11 @@ actor NativeServer {
         appendServiceLog("PTT停止: \(state.deviceId), bytes=\(pcmBuffer.count)")
 
         if pcmBuffer.isEmpty {
-            sendJson(to: conn, ["type": "status", "status": "empty_segment"])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "empty_segment"])
             return
         }
 
-        sendJson(to: conn, ["type": "status", "status": "transcribing", "bytes": pcmBuffer.count])
+        sendJson(to: conn, ["type": LANServerMessage.status, "status": "transcribing", "bytes": pcmBuffer.count])
         let startedAt = Date()
 
         // Transcribe via STT service
@@ -544,11 +715,36 @@ actor NativeServer {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
         appendServiceLog("STT [\("\(latencyMs)ms")]: \(trimmed.prefix(60))")
+        await deliverTranscript(trimmed, latencyMs: latencyMs, connId: connId, conn: conn, state: state)
+    }
+
+    private func sendTranscriptPartial(_ text: String, connId: UUID) async {
+        guard let conn = await wsServer.connection(id: connId) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        sendJson(to: conn, [
+            "type": LANServerMessage.transcript_partial,
+            "text": trimmed,
+        ])
+    }
+
+    private func deliverTranscript(
+        _ trimmed: String,
+        latencyMs: Int,
+        connId: UUID,
+        conn: WSConnection,
+        state: ClientState
+    ) async {
+        var state = state
+        state.segmentActive = false
+        state.chunks = []
+        state.audioBytes = 0
+        clientStates[connId] = state
 
         guard !trimmed.isEmpty else {
             let hadPending = !state.pendingTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             sendJson(to: conn, [
-                "type": "status",
+                "type": LANServerMessage.status,
                 "status": hadPending ? "empty_segment" : "transcript_empty",
                 "text": state.pendingTranscript
             ])
@@ -561,7 +757,7 @@ actor NativeServer {
         // Todo mode: dispatch to todo assistant
         if voiceMode == "todo" {
             sendJson(to: conn, [
-                "type": "transcript_final",
+                "type": LANServerMessage.transcript_final,
                 "text": trimmed,
                 "latencyMs": latencyMs,
                 "requiresAction": false
@@ -590,18 +786,18 @@ actor NativeServer {
             state.pendingTranscript = pendingTranscript
             clientStates[connId] = state
             sendJson(to: conn, [
-                "type": "transcript_final",
+                "type": LANServerMessage.transcript_final,
                 "text": pendingTranscript,
                 "latencyMs": latencyMs,
                 "requiresAction": true
             ])
-            sendJson(to: conn, ["type": "status", "status": "awaiting_action", "text": pendingTranscript])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "awaiting_action", "text": pendingTranscript])
             return
         }
 
         // Immediate mode: dispatch right away
         sendJson(to: conn, [
-            "type": "transcript_final",
+            "type": LANServerMessage.transcript_final,
             "text": trimmed,
             "latencyMs": latencyMs,
             "requiresAction": false
@@ -618,7 +814,7 @@ actor NativeServer {
         do {
             try await dispatchTranscript(trimmed, injectionMode: injectionMode, connId: connId)
         } catch {
-            sendJson(to: conn, ["type": "status", "status": "input_error", "message": error.localizedDescription])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "input_error", "message": error.localizedDescription])
             appendServiceLog("输入失败: \(error.localizedDescription)")
             return
         }
@@ -626,7 +822,7 @@ actor NativeServer {
         state.injectedSegments.append(trimmed)
         state.pendingSegments = []
         clientStates[connId] = state
-        sendJson(to: conn, ["type": "status", "status": "typed", "text": trimmed])
+        sendJson(to: conn, ["type": LANServerMessage.status, "status": "typed", "text": trimmed])
     }
 
     // MARK: - Action Handlers
@@ -639,7 +835,7 @@ actor NativeServer {
         let voiceMode = resolveVoiceMode(state)
 
         guard !transcript.isEmpty else {
-            sendJson(to: conn, ["type": "status", "status": "no_pending"])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "no_pending"])
             return
         }
 
@@ -655,11 +851,11 @@ actor NativeServer {
             try await dispatchPrompt(transcript, injectionMode: injectionMode, connId: connId)
         } catch {
             if error.localizedDescription.lowercased().contains("busy") {
-                sendJson(to: conn, ["type": "status", "status": "cli_busy"])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "cli_busy"])
                 return
             }
             appendServiceLog("输入失败: \(error.localizedDescription)")
-            sendJson(to: conn, ["type": "status", "status": "input_error", "message": error.localizedDescription])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "input_error", "message": error.localizedDescription])
             return
         }
 
@@ -669,7 +865,7 @@ actor NativeServer {
         state.pendingTranscript = ""
         state.pendingSegments = []
         clientStates[connId] = state
-        sendJson(to: conn, ["type": "status", "status": "typed", "text": transcript])
+        sendJson(to: conn, ["type": LANServerMessage.status, "status": "typed", "text": transcript])
     }
 
     private func handleActionUndo(connId: UUID) async {
@@ -684,10 +880,10 @@ actor NativeServer {
             clientStates[connId] = state
 
             if !transcript.isEmpty {
-                sendJson(to: conn, ["type": "status", "status": "awaiting_action", "text": transcript])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "awaiting_action", "text": transcript])
             } else {
-                sendJson(to: conn, ["type": "transcript_cleared"])
-                sendJson(to: conn, ["type": "status", "status": "undo_ok"])
+                sendJson(to: conn, ["type": LANServerMessage.transcript_cleared])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "undo_ok"])
             }
             return
         }
@@ -695,24 +891,29 @@ actor NativeServer {
         // Otherwise, undo last injected text (text_injector mode only)
         let voiceMode = resolveVoiceMode(state)
         guard voiceMode == "normal", config.sendTarget == "text_injector", !state.injectedSegments.isEmpty else {
-            sendJson(to: conn, ["type": "status", "status": "no_pending"])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "no_pending"])
             return
         }
 
-        let previousTranscript = joinInjectedSegments(state.injectedSegments)
         let removedSegment = state.injectedSegments.popLast()
         let nextTranscript = joinInjectedSegments(state.injectedSegments)
         let injectionMode = state.segmentTextInjectionMode ?? config.textInjectionMode
-        let prevLength = previousTranscript.count
-        let nextLength = nextTranscript.count
-        let charsToUndo = max(0, prevLength - nextLength) + (injectionMode == "type_and_enter" ? 1 : 0)
+        let charsToUndo: Int
+        if let removed = removedSegment {
+            // Backspace count follows extended grapheme clusters (Swift String.count).
+            // Limitation: rare combining-mark edge cases may differ from target app; see README §隐私.
+            charsToUndo = TextInjector.backspaceSteps(for: removed)
+                + (injectionMode == "type_and_enter" ? 1 : 0)
+        } else {
+            charsToUndo = 0
+        }
 
         guard charsToUndo > 0 else {
             if let removed = removedSegment {
                 state.injectedSegments.append(removed)
             }
             clientStates[connId] = state
-            sendJson(to: conn, ["type": "status", "status": "no_pending"])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "no_pending"])
             return
         }
 
@@ -723,15 +924,17 @@ actor NativeServer {
                 state.injectedSegments.append(removed)
             }
             clientStates[connId] = state
-            print("[NativeServer] dispatchPrompt error: \(error.localizedDescription)")
+            appendServiceLog("undo 注入失败: \(error.localizedDescription)")
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "input_error", "message": error.localizedDescription])
+            return
         }
 
         clientStates[connId] = state
 
         if nextTranscript.isEmpty {
-            sendJson(to: conn, ["type": "transcript_cleared"])
+            sendJson(to: conn, ["type": LANServerMessage.transcript_cleared])
         }
-        sendJson(to: conn, ["type": "status", "status": "undo_ok", "text": nextTranscript])
+        sendJson(to: conn, ["type": LANServerMessage.status, "status": "undo_ok", "text": nextTranscript])
     }
 
     // MARK: - Todo Command
@@ -788,20 +991,24 @@ actor NativeServer {
         let state = clientStates[connId] ?? ClientState()
         let text = ((message["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
-            sendJson(to: conn, ["type": "warning", "warning": "prompt_empty"])
+            sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "prompt_empty"])
             return
         }
 
         let voiceMode = resolveVoiceMode(state)
 
-        // Check CLI busy
+        // Check CLI busy — queue instead of rejecting
         if voiceMode == "normal" {
-            if config.sendTarget == "claude_code" && claudeSession.isRunning {
-                sendJson(to: conn, ["type": "status", "status": "cli_busy"])
+            let claudeBusy = claudeSession.isRunning
+            let codexBusy = codexSession.isRunning
+            if config.sendTarget == "claude_code" && claudeBusy {
+                enqueuePrompt(text, connId: connId, injectionMode: nil)
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "cli_busy"])
                 return
             }
-            if config.sendTarget == "codex_exec" && codexSession.isRunning {
-                sendJson(to: conn, ["type": "status", "status": "cli_busy"])
+            if config.sendTarget == "codex_exec" && codexBusy {
+                enqueuePrompt(text, connId: connId, injectionMode: nil)
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "cli_busy"])
                 return
             }
         }
@@ -811,7 +1018,7 @@ actor NativeServer {
         } else {
             do {
                 try await dispatchPrompt(text, connId: connId)
-                sendJson(to: conn, ["type": "status", "status": "typed", "text": text])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "typed", "text": text])
             } catch {
                 let msg = error.localizedDescription
                 appendCliLog("error: \(msg)")
@@ -827,11 +1034,11 @@ actor NativeServer {
         let nextTarget = ((message["sendTarget"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let validTargets: Set<String> = ["text_injector", "codex_exec", "claude_code"]
         guard validTargets.contains(nextTarget) else {
-            sendJson(to: conn, ["type": "warning", "warning": "invalid_send_target"])
+            sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "invalid_send_target"])
             return
         }
         guard !codexSession.isRunning && !claudeSession.isRunning else {
-            sendJson(to: conn, ["type": "status", "status": "cli_busy"])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "cli_busy"])
             return
         }
         if config.sendTarget != nextTarget {
@@ -878,7 +1085,7 @@ actor NativeServer {
             state.voiceMode = nextMode
             clientStates[connId] = state
             if let conn = await wsServer.connection(id: connId) {
-                sendJson(to: conn, ["type": "mode_state", "mode": nextMode])
+                sendJson(to: conn, ["type": LANServerMessage.mode_state, "mode": nextMode])
             }
             changed = true
         }
@@ -895,14 +1102,14 @@ actor NativeServer {
         let nextMode = ((message["mode"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let validModes: Set<String> = ["normal", "todo"]
         guard validModes.contains(nextMode) else {
-            sendJson(to: conn, ["type": "warning", "warning": "invalid_voice_mode"])
+            sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "invalid_voice_mode"])
             return
         }
         if state.voiceMode != nextMode {
             state.voiceMode = nextMode
             clientStates[connId] = state
         }
-        sendJson(to: conn, ["type": "mode_state", "mode": resolveVoiceMode(state)])
+        sendJson(to: conn, ["type": LANServerMessage.mode_state, "mode": resolveVoiceMode(state)])
     }
 
     private func handleSetCliCwd(_ message: [String: Any], connId: UUID) async {
@@ -910,16 +1117,16 @@ actor NativeServer {
         let target = ((message["sendTarget"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let nextCwd = ((message["cwd"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard target == "codex_exec" || target == "claude_code" else {
-            sendJson(to: conn, ["type": "warning", "warning": "invalid_cli_cwd_target"])
+            sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "invalid_cli_cwd_target"])
             return
         }
         guard !nextCwd.isEmpty else {
-            sendJson(to: conn, ["type": "warning", "warning": "cli_cwd_empty"])
+            sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "cli_cwd_empty"])
             return
         }
         let resolved = NSString(string: nextCwd).expandingTildeInPath
         guard FileManager.default.fileExists(atPath: resolved) else {
-            sendJson(to: conn, ["type": "warning", "warning": "invalid_cli_cwd:\(nextCwd)"])
+            sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "invalid_cli_cwd:\(nextCwd)"])
             return
         }
         if target == "claude_code" {
@@ -928,7 +1135,7 @@ actor NativeServer {
             config.codexCwd = resolved
         }
         sendJson(to: conn, [
-            "type": "cli_cwd_updated",
+            "type": LANServerMessage.cli_cwd_updated,
             "sendTarget": target,
             "cwd": resolved
         ])
@@ -941,11 +1148,11 @@ actor NativeServer {
         var state = clientStates[connId] ?? ClientState()
         let direction = ((message["direction"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard direction == "prev" || direction == "next" else {
-            sendJson(to: conn, ["type": "warning", "warning": "invalid_plan_select_direction"])
+            sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "invalid_plan_select_direction"])
             return
         }
         guard !state.planOptions.isEmpty else {
-            sendJson(to: conn, ["type": "status", "status": "no_plan_options"])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "no_plan_options"])
             return
         }
         let delta = direction == "prev" ? -1 : 1
@@ -960,22 +1167,23 @@ actor NativeServer {
         guard let conn = await wsServer.connection(id: connId) else { return }
         let state = clientStates[connId] ?? ClientState()
 
-        guard config.sendTarget == "claude_code" ? !claudeSession.isRunning : !codexSession.isRunning else {
-            sendJson(to: conn, ["type": "status", "status": "cli_busy"])
+        let cliBusy = config.sendTarget == "claude_code" ? claudeSession.isRunning : codexSession.isRunning
+        guard !cliBusy else {
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "cli_busy"])
             return
         }
 
         guard state.planOptions.count > 0,
               state.planSelectedIndex >= 0,
               state.planSelectedIndex < state.planOptions.count else {
-            sendJson(to: conn, ["type": "status", "status": "no_plan_options"])
+            sendJson(to: conn, ["type": LANServerMessage.status, "status": "no_plan_options"])
             return
         }
 
         let selectedOption = state.planOptions[state.planSelectedIndex].trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = buildPlanApplyPrompt(selectedOption)
 
-        sendJson(to: conn, ["type": "status", "status": "typed", "text": prompt])
+        sendJson(to: conn, ["type": LANServerMessage.status, "status": "typed", "text": prompt])
         do {
             try await dispatchPrompt(prompt, connId: connId)
         } catch {
@@ -996,10 +1204,18 @@ actor NativeServer {
             state.chunks = []
             state.audioBytes = 0
             clientStates[connId] = state
+            streamingSttSessions.removeValue(forKey: connId)?.cancel()
             if let conn = await wsServer.connection(id: connId) {
-                sendJson(to: conn, ["type": "warning", "warning": "audio_too_large"])
-                sendJson(to: conn, ["type": "status", "status": "audio_too_large"])
+                sendJson(to: conn, ["type": LANServerMessage.warning, "warning": "audio_too_large"])
+                sendJson(to: conn, ["type": LANServerMessage.status, "status": "audio_too_large"])
             }
+            return
+        }
+
+        if let session = streamingSttSessions[connId] {
+            session.append(pcm16: data)
+            state.audioBytes = nextBytes
+            clientStates[connId] = state
             return
         }
 
@@ -1014,14 +1230,14 @@ actor NativeServer {
     private func dispatchTranscript(_ text: String, injectionMode: String, connId: UUID) async throws {
         switch config.sendTarget {
         case "codex_exec":
-            guard !codexSession.isRunning else {
-                appendCliLog("CLI busy — Codex session already running")
+            if codexSession.isRunning {
+                enqueuePrompt(text, connId: connId, injectionMode: injectionMode)
                 return
             }
             launchCodexPrompt(text)
         case "claude_code":
-            guard !claudeSession.isRunning else {
-                appendCliLog("CLI busy — Claude session already running")
+            if claudeSession.isRunning {
+                enqueuePrompt(text, connId: connId, injectionMode: injectionMode)
                 return
             }
             launchClaudePrompt(text)
@@ -1037,10 +1253,16 @@ actor NativeServer {
 
         switch config.sendTarget {
         case "codex_exec":
-            guard !codexSession.isRunning else { throw NativeServerError.cliBusy }
+            if codexSession.isRunning {
+                enqueuePrompt(text, connId: connId, injectionMode: mode)
+                return
+            }
             await runCodexPrompt(text)
         case "claude_code":
-            guard !claudeSession.isRunning else { throw NativeServerError.cliBusy }
+            if claudeSession.isRunning {
+                enqueuePrompt(text, connId: connId, injectionMode: mode)
+                return
+            }
             await runClaudePrompt(text)
         default:
             cliView.latestUserText = text
@@ -1056,15 +1278,16 @@ actor NativeServer {
     // MARK: - CLI Session Launchers
 
     private func runCodexPrompt(_ text: String) async {
+        let threadId = codexSession.threadId
         cliView.latestUserText = text
         cliView.latestAssistantText = ""
-        setCliState(phase: "running", statusLine: "Running Codex...", threadId: codexSession.threadId)
+        setCliState(phase: "running", statusLine: "Running Codex...", threadId: threadId)
         broadcastCliSummary()
         appendCliLog("user: \(text.prefix(80))")
 
         do {
             let bridge = CLIEventBridge { [weak self] event in
-                Task { await self?.handleCLIEvent(event, source: "codex") }
+                Task { await self?.handleCLIEvent(event, source: "codex", connId: nil) }
             }
             codexEventBridge = bridge
             codexSession.delegate = bridge
@@ -1076,15 +1299,16 @@ actor NativeServer {
     }
 
     private func runClaudePrompt(_ text: String) async {
+        let sessionId = claudeSession.sessionId ?? ""
         cliView.latestUserText = text
         cliView.latestAssistantText = ""
-        setCliState(phase: "running", statusLine: "Running Claude...", threadId: claudeSession.sessionId ?? "")
+        setCliState(phase: "running", statusLine: "Running Claude...", threadId: sessionId)
         broadcastCliSummary()
         appendCliLog("user: \(text.prefix(80))")
 
         do {
             let bridge = CLIEventBridge { [weak self] event in
-                Task { await self?.handleCLIEvent(event, source: "claude") }
+                Task { await self?.handleCLIEvent(event, source: "claude", connId: nil) }
             }
             claudeEventBridge = bridge
             claudeSession.delegate = bridge
@@ -1095,7 +1319,7 @@ actor NativeServer {
         }
     }
 
-    private func handleCLIEvent(_ event: CLIEvent, source: String) {
+    private func handleCLIEvent(_ event: CLIEvent, source: String, connId: UUID?) async {
         switch event {
         case .text(let text, let role):
             if role == "assistant" {
@@ -1106,11 +1330,17 @@ actor NativeServer {
         case .status(let status):
             setCliState(phase: "running", statusLine: status)
         case .completed(let result):
+            lastExternalSnapshotSignature = ""
             cliView.threadId = result.sessionId ?? ""
             setCliState(phase: result.success ? "idle" : "error",
                        statusLine: result.success ? "\(source.capitalized) idle" : "Error: exit \(result.exitCode ?? -1)",
                        threadId: cliView.threadId)
             broadcastCliSummary()
+            refreshRateLimits()
+            if result.success, !result.text.isEmpty {
+                await applyPlanOptionsFromAssistantText(result.text, connId: connId)
+            }
+            await drainPromptQueue()
         case .error(let message):
             setCliState(phase: "error", statusLine: "\(source.capitalized) error: \(message)")
             appendCliLog("error: \(message)")
@@ -1128,6 +1358,24 @@ actor NativeServer {
         Task { [weak self] in
             guard let self else { return }
             await self.runClaudePrompt(text)
+        }
+    }
+
+    private func enqueuePrompt(_ text: String, connId: UUID, injectionMode: String?) {
+        cliPromptQueue.append((text, connId, injectionMode))
+        appendServiceLog("CLI 排队 (\(cliPromptQueue.count)): \(text.prefix(40))")
+    }
+
+    private func drainPromptQueue() async {
+        guard !codexSession.isRunning, !claudeSession.isRunning else { return }
+        guard !cliPromptQueue.isEmpty else { return }
+        let next = cliPromptQueue.removeFirst()
+        appendServiceLog("CLI 出队: \(next.text.prefix(40))")
+        do {
+            try await dispatchPrompt(next.text, injectionMode: next.injectionMode, connId: next.connId)
+        } catch {
+            appendCliLog("error: \(error.localizedDescription)")
+            setCliState(phase: "error", statusLine: error.localizedDescription)
         }
     }
 
@@ -1184,8 +1432,13 @@ actor NativeServer {
     // MARK: - Broadcasting
 
     func broadcastServerReady(to conn: WSConnection) {
-        sendJson(to: conn, [
-            "type": "server_ready",
+        sendJson(to: conn, serverReadyPayload())
+    }
+
+    private func serverReadyPayload() -> [String: Any] {
+        [
+            "type": LANServerMessage.server_ready,
+            "protocolVersion": LANProtocol.version,
             "textInjectionMode": config.textInjectionMode,
             "transcriptDeliveryMode": config.transcriptDeliveryMode,
             "sendTarget": config.sendTarget,
@@ -1193,41 +1446,68 @@ actor NativeServer {
             "displayTodoRefreshMs": config.displayTodoRefreshMs,
             "displayCodingRefreshMs": config.displayCodingRefreshMs,
             "displayStyle": config.displayStyle
-        ])
+        ]
     }
 
     func broadcastServerReady() {
         Task { [weak self] in
             guard let self else { return }
-            await self.wsServer.broadcast(json: [
-                "type": "server_ready",
-                "textInjectionMode": self.config.textInjectionMode,
-                "transcriptDeliveryMode": self.config.transcriptDeliveryMode,
-                "sendTarget": self.config.sendTarget,
-                "authRequired": !self.config.lanSharedSecret.isEmpty,
-                "displayTodoRefreshMs": self.config.displayTodoRefreshMs,
-                "displayCodingRefreshMs": self.config.displayCodingRefreshMs,
-                "displayStyle": self.config.displayStyle
-            ])
+            await self.wsServer.broadcast(json: self.serverReadyPayload())
         }
     }
 
     func broadcastCliState() {
-        let payload: [String: Any] = [
-            "type": "cli_session_state",
+        refreshRateLimits()
+        var payload: [String: Any] = [
+            "type": LANServerMessage.cli_session_state,
             "phase": cliView.phase,
             "statusLine": cliView.statusLine,
             "threadId": cliView.threadId,
             "repoName": effectiveRepoLabel,
             "cwd": cliView.cwd
         ]
+        if let q5 = cliView.quota5hRemainingPct { payload["quota5hRemainingPct"] = q5 }
+        if let qw = cliView.quotaWeekRemainingPct { payload["quotaWeekRemainingPct"] = qw }
         broadcastJson(payload)
         onCliStateChange?(payload)
     }
 
+    private func refreshRateLimits() {
+        guard config.sendTarget == "codex_exec" || config.sendTarget == "claude_code" else { return }
+        guard let snapshot = CLIRateLimits.readLatest(sendTarget: config.sendTarget, threadId: cliView.threadId) else {
+            return
+        }
+        cliView.quota5hRemainingPct = snapshot.primaryRemainingPct
+        cliView.quotaWeekRemainingPct = snapshot.secondaryRemainingPct
+    }
+
+    private func applyPlanOptionsFromAssistantText(_ text: String, connId: UUID?) async {
+        let options = PlanOptionsExtractor.extract(from: text)
+        guard !options.isEmpty else { return }
+
+        if let connId, var state = clientStates[connId] {
+            state.planOptions = options
+            state.planSelectedIndex = 0
+            clientStates[connId] = state
+            if let conn = await wsServer.connection(id: connId) {
+                emitPlanOptions(to: conn, state: state)
+            }
+            return
+        }
+
+        for (id, var state) in clientStates where state.authenticated {
+            state.planOptions = options
+            state.planSelectedIndex = 0
+            clientStates[id] = state
+            if let conn = await wsServer.connection(id: id) {
+                emitPlanOptions(to: conn, state: state)
+            }
+        }
+    }
+
     func broadcastCliSummary() {
         broadcastJson([
-            "type": "cli_summary",
+            "type": LANServerMessage.cli_summary,
             "latestUserText": cliView.latestUserText,
             "latestAssistantText": cliView.latestAssistantText,
             "statusLine": cliView.statusLine,
@@ -1251,7 +1531,7 @@ actor NativeServer {
     private func todoStatePayload() async -> [String: Any] {
         let snapshot = await getTodoSnapshot()
         return [
-            "type": "todo_state",
+            "type": LANServerMessage.todo_state,
             "items": snapshot.items.map { itemToDict($0) },
             "archiveItems": snapshot.archiveItems.map { itemToDict($0) },
             "selectedIndex": snapshot.selectedIndex,
@@ -1261,7 +1541,7 @@ actor NativeServer {
 
     func broadcastDisplayConfig(to conn: WSConnection? = nil) {
         let payload: [String: Any] = [
-            "type": "display_config",
+            "type": LANServerMessage.display_config,
             "todoRefreshMs": config.displayTodoRefreshMs,
             "codingRefreshMs": config.displayCodingRefreshMs,
             "style": config.displayStyle
@@ -1294,6 +1574,96 @@ actor NativeServer {
     private func stopKeepalive() {
         keepaliveTask?.cancel()
         keepaliveTask = nil
+    }
+
+    private func startExternalCliWatcher() {
+        externalWatchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: externalWatchIntervalMs * 1_000_000)
+                guard let self else { break }
+                let running = await self.isRunning
+                guard running else { break }
+                await self.pollExternalCliState()
+            }
+        }
+    }
+
+    private func stopExternalCliWatcher() {
+        externalWatchTask?.cancel()
+        externalWatchTask = nil
+        lastExternalSnapshotSignature = ""
+    }
+
+    private func pollExternalCliState() async {
+        guard config.sendTarget == "codex_exec" || config.sendTarget == "claude_code" else { return }
+        guard !codexSession.isRunning && !claudeSession.isRunning else { return }
+
+        if config.sendTarget == "codex_exec" {
+            guard let file = CodexRolloutParser.findLatestRolloutFile(threadId: cliView.threadId),
+                  let snapshot = CodexRolloutParser.snapshot(from: file) else { return }
+            applyExternalCodexSnapshot(snapshot)
+        } else {
+            guard let snapshot = ClaudeTranscriptParser.discoverLatest(cwdFilter: config.claudeCwd) else { return }
+            applyExternalClaudeSnapshot(snapshot)
+        }
+    }
+
+    private func applyExternalCodexSnapshot(_ snapshot: CodexRolloutSnapshot) {
+        let signature = [
+            snapshot.sessionId,
+            snapshot.phase,
+            snapshot.lastAssistantMessage,
+            snapshot.currentTool,
+            snapshot.summary
+        ].joined(separator: "|")
+        guard signature != lastExternalSnapshotSignature else { return }
+        lastExternalSnapshotSignature = signature
+
+        if !snapshot.sessionId.isEmpty { cliView.threadId = snapshot.sessionId }
+        if !snapshot.lastUserPrompt.isEmpty { cliView.latestUserText = snapshot.lastUserPrompt }
+        if !snapshot.lastAssistantMessage.isEmpty { cliView.latestAssistantText = snapshot.lastAssistantMessage }
+        let status = !snapshot.currentTool.isEmpty
+            ? "\(snapshot.currentTool)…"
+            : (snapshot.summary.isEmpty ? "Codex" : snapshot.summary)
+        setCliState(
+            phase: snapshot.phase,
+            statusLine: String(status.prefix(120)),
+            threadId: snapshot.sessionId.isEmpty ? nil : snapshot.sessionId
+        )
+        if let primary = snapshot.primaryUsedPct {
+            cliView.quota5hRemainingPct = max(0, Int((100 - primary).rounded()))
+        }
+        if let secondary = snapshot.secondaryUsedPct {
+            cliView.quotaWeekRemainingPct = max(0, Int((100 - secondary).rounded()))
+        }
+        broadcastCliState()
+        broadcastCliSummary()
+    }
+
+    private func applyExternalClaudeSnapshot(_ snapshot: ClaudeTranscriptSnapshot) {
+        let signature = [
+            snapshot.sessionId,
+            snapshot.lastAssistantMessage,
+            snapshot.currentTool,
+            snapshot.lastUserPrompt
+        ].joined(separator: "|")
+        guard signature != lastExternalSnapshotSignature else { return }
+        lastExternalSnapshotSignature = signature
+
+        if !snapshot.sessionId.isEmpty { cliView.threadId = snapshot.sessionId }
+        if !snapshot.lastUserPrompt.isEmpty { cliView.latestUserText = snapshot.lastUserPrompt }
+        if !snapshot.lastAssistantMessage.isEmpty { cliView.latestAssistantText = snapshot.lastAssistantMessage }
+        let status = !snapshot.currentTool.isEmpty
+            ? "\(snapshot.currentTool)…"
+            : (snapshot.lastAssistantMessage.isEmpty ? "Claude" : String(snapshot.lastAssistantMessage.prefix(120)))
+        setCliState(
+            phase: "running",
+            statusLine: status,
+            threadId: snapshot.sessionId.isEmpty ? nil : snapshot.sessionId
+        )
+        refreshRateLimits()
+        broadcastCliState()
+        broadcastCliSummary()
     }
 
     private func runKeepalive() async {
@@ -1336,6 +1706,13 @@ actor NativeServer {
         clientStates[conn.id] = state
         appendServiceLog("WS连接: \(conn.remoteAddress)")
 
+        if !config.lanSharedSecret.isEmpty {
+            let serverNonce = UUID().uuidString.lowercased()
+            state.authChallengeNonce = serverNonce
+            clientStates[conn.id] = state
+            sendJson(to: conn, ["type": LANServerMessage.auth_challenge, "serverNonce": serverNonce])
+        }
+
         // Wire message handler
         conn.onMessage = { [weak self] message in
             Task { await self?.handleWSMessage(message, connId: conn.id) }
@@ -1353,7 +1730,7 @@ actor NativeServer {
         onDeviceEvent?("disconnected", deviceId, boardType)
         appendServiceLog("设备断开: \(deviceId)")
         broadcastJson([
-            "type": "device_event",
+            "type": LANServerMessage.device_event,
             "event": "disconnected",
             "deviceId": deviceId,
             "boardType": boardType
@@ -1394,7 +1771,7 @@ actor NativeServer {
 
     private func sendTodoResult(to conn: WSConnection, ok: Bool, action: String, message: String) {
         sendJson(to: conn, [
-            "type": "todo_result",
+            "type": LANServerMessage.todo_result,
             "ok": ok,
             "action": action,
             "message": message
@@ -1406,16 +1783,20 @@ actor NativeServer {
     }
 
     private func emitCliSnapshot(to conn: WSConnection) {
-        sendJson(to: conn, [
-            "type": "cli_session_state",
+        refreshRateLimits()
+        var cliState: [String: Any] = [
+            "type": LANServerMessage.cli_session_state,
             "phase": cliView.phase,
             "statusLine": cliView.statusLine,
             "threadId": cliView.threadId,
             "repoName": effectiveRepoLabel,
             "cwd": cliView.cwd
-        ])
+        ]
+        if let q5 = cliView.quota5hRemainingPct { cliState["quota5hRemainingPct"] = q5 }
+        if let qw = cliView.quotaWeekRemainingPct { cliState["quotaWeekRemainingPct"] = qw }
+        sendJson(to: conn, cliState)
         sendJson(to: conn, [
-            "type": "cli_summary",
+            "type": LANServerMessage.cli_summary,
             "latestUserText": cliView.latestUserText,
             "latestAssistantText": cliView.latestAssistantText,
             "statusLine": cliView.statusLine,
@@ -1423,14 +1804,14 @@ actor NativeServer {
             "repoName": effectiveRepoLabel
         ])
         sendJson(to: conn, [
-            "type": "cli_log_tail",
+            "type": LANServerMessage.cli_log_tail,
             "lines": cliView.logLines
         ])
     }
 
     private func emitPlanOptions(to conn: WSConnection, state: ClientState) {
         sendJson(to: conn, [
-            "type": "plan_options",
+            "type": LANServerMessage.plan_options,
             "options": state.planOptions,
             "selectedIndex": state.planSelectedIndex >= 0 ? state.planSelectedIndex : (state.planOptions.isEmpty ? -1 : 0)
         ])
@@ -1445,7 +1826,7 @@ actor NativeServer {
 
     private func closeWithAuthError(_ conn: WSConnection, connId: UUID, error: String) {
         appendServiceLog("认证失败: \(error), addr=\(conn.remoteAddress)")
-        sendJson(to: conn, ["type": "error", "error": error])
+        sendJson(to: conn, ["type": LANServerMessage.error, "error": error])
         conn.close()
         clientStates.removeValue(forKey: connId)
     }
@@ -1482,7 +1863,7 @@ actor NativeServer {
 
     private func appendCliLog(_ line: String) {
         cliView.pushLogLine(line)
-        broadcastJson(["type": "cli_log_tail", "lines": cliView.logLines])
+        broadcastJson(["type": LANServerMessage.cli_log_tail, "lines": cliView.logLines])
         onCliLogTail?(cliView.logLines)
     }
 
@@ -1556,11 +1937,13 @@ private func joinInjectedSegments(_ segments: [String]) -> String {
 enum NativeServerError: LocalizedError {
     case cliBusy
     case notRunning
+    case firmwareUpToDate
 
     var errorDescription: String? {
         switch self {
         case .cliBusy: "CLI session is busy"
         case .notRunning: "Server is not running"
+        case .firmwareUpToDate: "Device firmware is already up to date"
         }
     }
 }

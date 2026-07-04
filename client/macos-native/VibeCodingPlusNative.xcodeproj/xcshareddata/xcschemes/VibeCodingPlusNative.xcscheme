@@ -39,7 +39,20 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C21E8EE2D59AEA9ABF303F7B"
+               BuildableName = "VibeCodingPlusNativeTests.xctest"
+               BlueprintName = "VibeCodingPlusNativeTests"
+               ReferencedContainer = "container:VibeCodingPlusNative.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

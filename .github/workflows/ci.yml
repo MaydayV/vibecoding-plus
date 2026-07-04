@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, todo-vibe]
+  pull_request:
+
+jobs:
+  native-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Swift tests
+        run: npm run native:test
+
+  firmware-host-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run firmware host tests
+        run: npm run firmware:host-test
+
+  protocol-generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Generate protocol constants
+        run: npm run protocol:generate
+      - name: Check generated files are committed
+        run: git diff --exit-code client/macos-native/Sources/VibeCodingPlusNative/Server/ProtocolConstants.swift firmware/main/protocol_messages.h
+
+  firmware-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: espressif/install-esp-idf-action@v1
+        with:
+          version: v5.5
+      - name: Build firmware
+        working-directory: firmware
+        run: idf.py build

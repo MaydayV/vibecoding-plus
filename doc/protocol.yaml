@@ -1,0 +1,59 @@
+version: 1
+
+device_to_server:
+  - hello
+  - ptt_start
+  - ptt_stop
+  - action_send
+  - action_undo
+  - action_enter
+  - action_clear_input
+  - set_mode
+  - set_target
+  - set_cli_cwd
+  - todo_command
+  - plan_select
+  - plan_apply
+  - ping
+  - prompt
+  - firmware_progress
+  - firmware_result
+  - firmware_check_result
+  - discover_host
+
+server_to_device:
+  - auth_challenge
+  - hello_ack
+  - server_ready
+  - display_config
+  - transcript_final
+  - transcript_partial
+  - transcript_cleared
+  - status
+  - mode_state
+  - todo_state
+  - todo_result
+  - cli_session_state
+  - cli_summary
+  - cli_log_tail
+  - cli_cwd_updated
+  - plan_options
+  - force_refresh
+  - device_event
+  - pong
+  - warning
+  - error
+  - firmware_check
+  - firmware_offer
+  - provision_secret
+  - pairing_nfc
+  - discover_reply
+
+send_targets:
+  - text_injector
+  - codex_exec
+  - claude_code
+
+voice_modes:
+  - normal
+  - todo

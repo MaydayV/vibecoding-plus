@@ -79,6 +79,12 @@ enum TextInjector {
         }
     }
 
+    /// Extended grapheme clusters to send as Backspace (key code 51) events.
+    /// Matches Swift `String.count`; may differ from some apps' word-boundary undo.
+    static func backspaceSteps(for text: String) -> Int {
+        text.count
+    }
+
     static func pressReturn(dryRun: Bool = false) async throws {
         if dryRun {
             InjectLogger.log("dry-run return")

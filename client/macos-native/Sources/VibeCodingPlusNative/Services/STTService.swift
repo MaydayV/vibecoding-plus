@@ -80,13 +80,19 @@ struct STTService {
 
     // MARK: - Provider Resolution
 
-    private func resolveProvider() -> STTProvider {
-        // Explicit config takes priority
+    /// Effective STT provider: UI/config first, then env override, then key inference.
+    func resolveProvider() -> STTProvider {
+        let configured = config.sttProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let provider = STTProvider(rawValue: configured) {
+            return provider
+        }
         if let explicit = ProcessInfo.processInfo.environment["STT_PROVIDER"],
            let provider = STTProvider(rawValue: explicit.lowercased()) {
             return provider
         }
-        // Infer from available keys
+        if !config.whisperCppModelPath.trimmingCharacters(in: .whitespaces).isEmpty {
+            return .whisperCpp
+        }
         if !config.qwenAsrApiKey.trimmingCharacters(in: .whitespaces).isEmpty {
             return .qwenAsr
         }
@@ -97,7 +103,6 @@ struct STTService {
             && !config.volcengineAccessKey.trimmingCharacters(in: .whitespaces).isEmpty {
             return .volcengine
         }
-        // Default fallback
         return .volcengine
     }
 
@@ -322,159 +327,15 @@ struct STTService {
     // MARK: - Qwen ASR (WebSocket Realtime)
 
     private func transcribeQwenAsr(pcm16Data: Data) async throws -> String {
-        let model = config.qwenAsrModel.trimmingCharacters(in: .whitespaces)
-        guard !model.isEmpty else {
-            throw STTError.missingAPIKey("QWEN_ASR_MODEL")
-        }
-        let apiKey = config.qwenAsrApiKey.trimmingCharacters(in: .whitespaces)
-        guard !apiKey.isEmpty else {
-            throw STTError.missingAPIKey("QWEN_ASR_API_KEY")
-        }
-        let baseURL = config.qwenAsrRealtimeBaseUrl.trimmingCharacters(in: .whitespaces)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard !baseURL.isEmpty else {
-            throw STTError.missingAPIKey("QWEN_ASR_REALTIME_BASE_URL")
-        }
+        let session = QwenStreamingSTTSession(config: config)
+        try await session.start(onPartial: { _ in })
+        session.append(pcm16: pcm16Data)
+        return try await session.finish()
+    }
 
-        let sampleRate = max(8000, config.qwenAsrSampleRate)
-        let wsURL = URL(string: "\(baseURL)?model=\(model.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? model)")!
-
-        let pcmData = pcm16Data
-
-        // Build request with auth headers (URLSessionWebSocketTask requires URLRequest for custom headers)
-        var wsRequest = URLRequest(url: wsURL)
-        wsRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        wsRequest.setValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
-
-        return try await withCheckedThrowingContinuation { continuation in
-            var resumed = false
-            let lock = NSLock()
-            func finish(_ result: Result<String, Error>) {
-                lock.lock()
-                guard !resumed else { lock.unlock(); return }
-                resumed = true
-                lock.unlock()
-                continuation.resume(with: result)
-            }
-
-            var transcript = ""
-            let session = URLSession(configuration: .default)
-            let task = session.webSocketTask(with: wsRequest)
-
-            // Timeout
-            let timeoutItem = DispatchWorkItem {
-                finish(.failure(STTError.timedOut))
-                task.cancel()
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + Self.requestTimeout, execute: timeoutItem)
-
-            func sendJSON(_ dict: [String: Any]) {
-                guard let data = try? JSONSerialization.data(withJSONObject: dict),
-                      let text = String(data: data, encoding: .utf8) else { return }
-                task.send(.string(text)) { _ in }
-            }
-
-            func buildPrompt() -> String {
-                var parts = [
-                    "请将音频准确转写为中文文本。",
-                    "只输出转写结果，不要解释。"
-                ]
-                let language = config.qwenAsrLanguage.trimmingCharacters(in: .whitespaces)
-                if !language.isEmpty {
-                    parts.append("语言提示：\(language)")
-                }
-                let extraPrompt = config.qwenAsrPrompt.trimmingCharacters(in: .whitespaces)
-                if !extraPrompt.isEmpty {
-                    parts.append(extraPrompt)
-                }
-                return parts.joined(separator: "\n")
-            }
-
-            func receiveLoop() {
-                task.receive { result in
-                    switch result {
-                    case .success(let message):
-                        switch message {
-                        case .string(let text):
-                            if let event = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] {
-                                let extracted = extractQwenRealtimeTranscript(event)
-                                if !extracted.isEmpty {
-                                    transcript = extracted
-                                }
-                                if (event["type"] as? String) == "session.finished" {
-                                    timeoutItem.cancel()
-                                    finish(.success(transcript.isEmpty ? extracted : transcript))
-                                    task.cancel(with: .normalClosure, reason: nil)
-                                    return
-                                }
-                            }
-                        default:
-                            break
-                        }
-                        receiveLoop()
-                    case .failure(let error):
-                        timeoutItem.cancel()
-                        finish(.failure(STTError.websocketError(error.localizedDescription)))
-                    }
-                }
-            }
-
-            task.resume()
-
-            // Wait briefly for connection, then send session config
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
-                var sessionConfig: [String: Any] = [
-                    "modalities": ["text"],
-                    "input_audio_format": "pcm",
-                    "sample_rate": sampleRate,
-                    "input_audio_transcription": [:] as [String: Any],
-                    "turn_detection": NSNull()
-                ]
-                let language = config.qwenAsrLanguage.trimmingCharacters(in: .whitespaces)
-                if !language.isEmpty {
-                    sessionConfig["input_audio_transcription"] = ["language": language]
-                }
-                let prompt = buildPrompt()
-                if !prompt.isEmpty {
-                    sessionConfig["instructions"] = prompt
-                }
-
-                sendJSON([
-                    "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))",
-                    "type": "session.update",
-                    "session": sessionConfig
-                ])
-
-                // Stream PCM chunks
-                let chunkSize = max(3200, (sampleRate / 10) * 2)
-                var offset = 0
-                var chunkIndex = 0
-                while offset < pcmData.count {
-                    let end = min(offset + chunkSize, pcmData.count)
-                    let chunk = pcmData.subdata(in: offset..<end)
-                    sendJSON([
-                        "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))_\(chunkIndex)",
-                        "type": "input_audio_buffer.append",
-                        "audio": chunk.base64EncodedString()
-                    ])
-                    offset = end
-                    chunkIndex += 1
-                }
-
-                // Commit and finish
-                sendJSON([
-                    "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))_commit",
-                    "type": "input_audio_buffer.commit"
-                ])
-                sendJSON([
-                    "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))_finish",
-                    "type": "session.finish"
-                ])
-
-                // Start receiving
-                receiveLoop()
-            }
-        }
+    /// Extract transcript text from a Qwen ASR realtime event.
+    static func extractQwenRealtimeTranscript(_ event: [String: Any]) -> String {
+        extractQwenRealtimeTranscriptImpl(event)
     }
 
     // MARK: - WAV Conversion
@@ -531,9 +392,7 @@ struct STTService {
 
 // MARK: - Qwen Realtime Transcript Extraction
 
-/// Extract transcript text from a Qwen ASR realtime event, matching the
-/// multi-format response parsing logic from the Node.js implementation.
-private func extractQwenRealtimeTranscript(_ event: [String: Any]) -> String {
+private func extractQwenRealtimeTranscriptImpl(_ event: [String: Any]) -> String {
     // Primary: completion event
     if (event["type"] as? String) == "conversation.item.input_audio_transcription.completed" {
         let text = (event["transcript"] as? String)

@@ -39,7 +39,12 @@ vibecoding-plus/
 │       │   ├── VibeCodingPlusNativeApp.swift  App 入口（WindowGroup + 菜单栏 accessory）
 │       │   ├── AppDelegate.swift              状态栏图标 / 窗口管理 / 服务菜单
 │       │   ├── AppState.swift                 ObservableObject 中央状态
-│       │   ├── Views.swift                    全部 SwiftUI 界面（墨水屏风格）
+│       │   ├── Views/                       SwiftUI 界面（按页面拆分）
+│       │   │   ├── RootView.swift           导航壳 + 侧栏
+│       │   │   ├── OverviewView.swift         概览
+│       │   │   ├── SettingsView.swift         设置
+│       │   │   ├── InkComponents.swift        共享 UI 组件
+│       │   │   └── …
 │       │   ├── Models.swift                   数据模型
 │       │   ├── SettingsStore.swift            配置持久化（config.env）
 │       │   ├── EnvironmentChecker.swift       macOS 权限与依赖检测
@@ -307,6 +312,29 @@ idf.py -p /dev/cu.usbmodem* flash
 - 采样率：16kHz
 - 位深：16-bit signed little-endian
 - 声道：单声道
+
+---
+
+## 隐私说明
+
+### 语音与 STT
+
+- 录音仅在按住设备 BOOT 键期间采集，经局域网 WebSocket 发送到**本机** macOS 客户端转写。
+- 若配置 OpenAI / Volcengine / Qwen 等云端 STT，音频或转写请求会发往对应服务商；使用 `whisper.cpp` 可完全本地转写。
+- 调试时可设 `SAVE_DEBUG_WAV=1` 将片段保存到系统临时目录。
+
+### 文本注入（剪贴板）
+
+- `text_injector` 模式通过 **剪贴板 + ⌘V** 将转写文本粘贴到当前前台应用的输入框（与 macOS 原生听写类似）。
+- 注入前会**备份**系统剪贴板内容，粘贴后**恢复**；若注入过程中你手动复制了其他内容，可能被覆盖——建议在注入完成前避免复制敏感数据。
+- 注入与撤回在专用串行队列执行，降低与并发剪贴板操作的竞态；仍无法消除所有第三方 App 的剪贴板监听行为。
+- **撤回（undo）** 对上一段注入发送若干次 Backspace（按 Unicode 字素簇计数）；复杂组合字符、部分富文本编辑器可能与预期步数不一致。
+- 诊断日志：`~/Library/Application Support/vibecoding-plus/inject.log`（不含剪贴板全文，仅有长度与结果）。
+
+### 本地数据
+
+- 待办、配置保存在 `~/Library/Application Support/vibecoding-plus/`。
+- Codex / Claude 会话状态只读观测时，仅读取 `~/.codex/sessions`、`~/.claude/projects` 等**本机已有**文件，不上传。
 
 ---
 

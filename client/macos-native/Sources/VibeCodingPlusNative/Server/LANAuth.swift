@@ -10,7 +10,7 @@ enum LANAuth {
 
     // MARK: - Signing
 
-    /// Signs a hello message.
+    /// Signs a hello message (legacy timestamp-based format).
     ///
     /// Message format: `"hello|{deviceId}|{boardType}|{ts}|{nonce}"`
     static func signHelloPayload(
@@ -21,6 +21,20 @@ enum LANAuth {
         timestamp: String
     ) -> String {
         let message = "hello|\(deviceId)|\(boardType)|\(timestamp)|\(nonce)"
+        return hmacHex(secret: secret, message: message)
+    }
+
+    /// Signs a hello message using server-issued challenge nonce (replay-safe).
+    ///
+    /// Message format: `"hello|{deviceId}|{boardType}|{serverNonce}|{deviceNonce}"`
+    static func signHelloChallengePayload(
+        secret: String,
+        deviceId: String,
+        boardType: String,
+        serverNonce: String,
+        deviceNonce: String
+    ) -> String {
+        let message = "hello|\(deviceId)|\(boardType)|\(serverNonce)|\(deviceNonce)"
         return hmacHex(secret: secret, message: message)
     }
 
@@ -35,6 +49,19 @@ enum LANAuth {
         nonce: String
     ) -> String {
         let message = "discover_reply|\(hostId)|\(hostName)|\(wsUrl)|\(nonce)"
+        return hmacHex(secret: secret, message: message)
+    }
+
+    /// Signs a pairing token for NFC / discovery pairing.
+    ///
+    /// Message format: `"pair_token|{hostId}|{pairCode}|{nonce}"`
+    static func signPairToken(
+        secret: String,
+        hostId: String,
+        pairCode: String,
+        nonce: String
+    ) -> String {
+        let message = "pair_token|\(hostId)|\(pairCode)|\(nonce)"
         return hmacHex(secret: secret, message: message)
     }
 

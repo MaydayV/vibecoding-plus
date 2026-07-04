@@ -10,10 +10,13 @@
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
-#include <freertos/task.h>
+#include <freertos/queue.h>
 
 #include "audio_codec.h"
-#include "button.h"
+#include "input/deferred_tap_tracker.h"
+#include "input/gpio_input_driver.h"
+
+struct cJSON;
 
 class Board;
 class Display;
@@ -32,16 +35,16 @@ private:
     Display* display_ = nullptr;
     std::unique_ptr<WebSocket> ws_;
     EventGroupHandle_t wifi_event_group_ = nullptr;
-    Button up_button_;
-    Button down_button_;
+    GpioInputDriver up_nav_driver_;
+    GpioInputDriver down_nav_driver_;
+    DeferredTapTracker todo_boot_tap_;
+    DeferredTapTracker injector_boot_tap_;
     bool hello_sent_ = false;
-    std::atomic<bool> up_clicked_{false};
-    std::atomic<bool> down_clicked_{false};
-    std::atomic<bool> up_double_clicked_{false};
-    std::atomic<bool> down_double_clicked_{false};
-    std::atomic<bool> up_long_pressed_{false};
-    std::atomic<bool> down_long_pressed_{false};
     std::atomic<bool> ws_disconnected_pending_{false};
+    std::atomic<bool> ws_connected_pending_{false};
+    std::atomic<bool> ws_error_pending_{false};
+    std::atomic<int> ws_error_code_{0};
+    std::string pending_connect_uri_;
     std::atomic<bool> connect_attempt_running_{false};
     std::atomic<bool> connect_attempt_completed_{false};
     std::atomic<bool> connect_cancel_requested_{false};
@@ -50,7 +53,30 @@ private:
     std::atomic<bool> wifi_reconfigure_restart_pending_{false};
     int reconnect_failure_count_ = 0;
     int64_t last_wifi_recovery_ms_ = 0;
-    TaskHandle_t connect_task_handle_ = nullptr;
+    std::atomic<TaskHandle_t> connect_task_handle_{nullptr};
+    int64_t last_user_input_ms_ = 0;
+    std::string auth_server_nonce_;
+    bool auth_challenge_received_ = false;
+    struct PendingServerMessage {
+        char* data = nullptr;
+        size_t len = 0;
+    };
+    QueueHandle_t server_msg_queue_ = nullptr;
+    enum class PendingNetEvent : uint8_t {
+        WifiConnecting,
+        WifiConnected,
+        WifiDisconnected,
+        WifiConfigEnter,
+        WifiConfigExit,
+        WsConnected,
+        WsError,
+    };
+    struct PendingNetMessage {
+        PendingNetEvent event;
+        char data[192];
+        int code = 0;
+    };
+    QueueHandle_t net_event_queue_ = nullptr;
     bool has_pending_transcript_ = false;
     std::string send_target_;         // received from server_ready: "claude_code" | "codex_exec" | "text_injector"
     int display_todo_refresh_ms_ = 800;
@@ -64,6 +90,7 @@ private:
         Transcribing,
         AwaitingAction,
         Running,
+        Upgrading,
         Error
     };
     enum class Page {
@@ -151,6 +178,10 @@ private:
     std::string paired_host_id_;
     std::string paired_host_name_;
     std::string nfc_last_uri_;
+    bool todo_nvs_dirty_ = false;
+    int64_t todo_nvs_dirty_since_ms_ = 0;
+    std::string todo_nvs_pending_snapshot_;
+    std::string todo_nvs_last_written_snapshot_;
 
     bool Initialize();
     void LoadPersistedNetworkState();
@@ -160,6 +191,7 @@ private:
     void ClearCachedServerUri();
     void UpdateNfcProvisionUri(const std::string& event_hint);
     void UpdateNfcAdminUri(const std::string& ws_uri);
+    void UpdateNfcPairingUri(const std::string& pairing_code);
     void WriteNfcUriIfNeeded(const std::string& uri, const char* reason);
     std::string BuildAdminUrlFromWsUri(const std::string& ws_uri) const;
     void RequestWifiReconfigureByReboot(const char* status_text, const char* hint_text);
@@ -182,6 +214,14 @@ private:
     bool IsPttPressed() const;
     bool IsNavButtonPressed(gpio_num_t gpio_num) const;
     bool SendJson(const char* json);
+    bool SendJsonObject(cJSON* root);
+    bool SendFirmwareProgress(const char* phase, int pct, const char* error);
+    bool SendFirmwareResult(bool ok, const char* version, const char* message);
+    bool SendFirmwareCheckResult(bool need_upgrade, const char* current_version);
+    void HandleFirmwareCheck(cJSON* root);
+    std::string GetSharedSecret() const;
+    void SaveSharedSecret(const std::string& secret);
+    void HandleFirmwareOffer(cJSON* root);
     bool SendHello();
     bool SendPttStart();
     bool SendPttStop();
@@ -199,6 +239,12 @@ private:
     bool StreamAudioFrame();
     void CapturePrerollFrame();
     bool FlushPrerollFrames();
+    void EnqueueServerMessage(const char* data, size_t len);
+    void EnqueueNetEvent(PendingNetEvent event, const std::string& data = "");
+    void DrainPendingEvents(int64_t now_ms);
+    void HandleWsConnected(const std::string& target_uri);
+    void HandleNetEvent(const PendingNetMessage& message);
+    void TouchUserInput(int64_t now_ms);
     void HandleServerMessage(const char* data, size_t len);
     void RefreshBatteryStatus(bool force_update = false);
     void HandleScroll(int direction);
@@ -218,6 +264,8 @@ private:
     void FlushPendingTodoOps();
     void LoadCachedTodoState();
     void SaveCachedTodoState();
+    void FlushCachedTodoStateIfNeeded(int64_t now_ms, bool force = false);
+    std::string BuildCachedTodoStateJson() const;
     void LoadPendingTodoOps();
     void SavePendingTodoOps();
     void SwitchPage(Page page);

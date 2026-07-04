@@ -82,7 +82,7 @@ actor DiscoveryServer {
         setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, socklen_t(MemoryLayout<Int32>.size))
 
         let payload = """
-        {"type":"discover_host","service":"\(serviceTag)","deviceId":"macos-native","nonce":"\(UUID().uuidString)"}
+        {"type":"\(LANDeviceMessage.discover_host)","service":"\(serviceTag)","deviceId":"macos-native","nonce":"\(UUID().uuidString)"}
         """
 
         var addr = sockaddr_in()
@@ -132,7 +132,7 @@ actor DiscoveryServer {
 
         let replyHostName = "\(hostname) · \(replyAddress)"
         var body: [String: Any] = [
-            "type": "discover_reply",
+            "type": LANServerMessage.discover_reply,
             "service": serviceTag,
             "hostId": config.discoveryHostId,
             "hostName": replyHostName,
@@ -141,6 +141,17 @@ actor DiscoveryServer {
             "nonce": nonce,
             "deviceId": deviceId,
         ]
+        if !config.pairingCode.isEmpty {
+            body["pairCode"] = config.pairingCode
+        }
+        if !config.lanSharedSecret.isEmpty, !nonce.isEmpty, !config.pairingCode.isEmpty {
+            body["pairToken"] = LANAuth.signPairToken(
+                secret: config.lanSharedSecret,
+                hostId: config.discoveryHostId,
+                pairCode: config.pairingCode,
+                nonce: nonce
+            )
+        }
 
         if !config.lanSharedSecret.isEmpty && !nonce.isEmpty {
             body["authSig"] = LANAuth.signDiscoveryReply(
@@ -168,7 +179,7 @@ actor DiscoveryServer {
 
     private func parseDiscoveryRequest(_ data: Data) -> [String: Any]? {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              obj["type"] as? String == "discover_host" else {
+              obj["type"] as? String == LANDeviceMessage.discover_host else {
             return nil
         }
         if let service = obj["service"] as? String, service != serviceTag {
@@ -227,6 +238,10 @@ actor DiscoveryServer {
         }
 
         return fallback
+    }
+
+    func localAddress(forRemoteIP remoteIP: String) -> String? {
+        findLocalAddress(forRemoteIP: remoteIP)
     }
 
     /// Parses an IPv4 dotted-decimal string into four octets.

@@ -55,52 +55,77 @@ enum WSEncoder {
     }
 }
 
+enum WSFrameParseOutcome {
+    case needMoreData
+    case message(WSFrameMessage)
+    case protocolError(String)
+}
+
 // MARK: - WSFrameParser
 
 final class WSFrameParser {
     private var buffer: [UInt8] = []
+    private let maxFramePayload: Int
 
-    func feed(_ data: Data) -> [WSFrameMessage] {
+    init(maxFramePayload: Int = 4 * 1024 * 1024) {
+        self.maxFramePayload = maxFramePayload
+    }
+
+    func feed(_ data: Data) -> (messages: [WSFrameMessage], protocolError: String?) {
         buffer.append(contentsOf: data)
         var messages: [WSFrameMessage] = []
         while !buffer.isEmpty {
-            guard let result = parseOne() else { break }
-            messages.append(result)
+            switch parseOne() {
+            case .needMoreData:
+                return (messages, nil)
+            case .message(let msg):
+                messages.append(msg)
+            case .protocolError(let reason):
+                buffer.removeAll()
+                return (messages, reason)
+            }
         }
-        return messages
+        return (messages, nil)
     }
 
-    private func parseOne() -> WSFrameMessage? {
-        guard buffer.count >= 2 else { return nil }
+    private func parseOne() -> WSFrameParseOutcome {
+        guard buffer.count >= 2 else { return .needMoreData }
 
         let byte0 = buffer[0]
         let byte1 = buffer[1]
         let opcode = byte0 & 0x0F
+        let fin = (byte0 & 0x80) != 0
         let masked = (byte1 & 0x80) != 0
         var payloadLen = Int(byte1 & 0x7F)
         var offset = 2
 
         if payloadLen == 126 {
-            guard buffer.count >= offset + 2 else { return nil }
+            guard buffer.count >= offset + 2 else { return .needMoreData }
             payloadLen = Int(UInt16(buffer[offset]) << 8 | UInt16(buffer[offset + 1]))
             offset += 2
         } else if payloadLen == 127 {
-            guard buffer.count >= offset + 8 else { return nil }
+            guard buffer.count >= offset + 8 else { return .needMoreData }
             var val: UInt64 = 0
             for i in 0..<8 { val = (val << 8) | UInt64(buffer[offset + i]) }
-            guard val <= Int.max else { return nil }
+            guard val <= UInt64(maxFramePayload) else { return .protocolError("frame_too_large") }
             payloadLen = Int(val)
             offset += 8
         }
 
+        guard payloadLen <= maxFramePayload else { return .protocolError("frame_too_large") }
+
+        if opcode == 0x00 || ((opcode == 0x01 || opcode == 0x02) && !fin) {
+            return .protocolError("fragmentation_unsupported")
+        }
+
         var maskKey: [UInt8]?
         if masked {
-            guard buffer.count >= offset + 4 else { return nil }
+            guard buffer.count >= offset + 4 else { return .needMoreData }
             maskKey = Array(buffer[offset..<offset + 4])
             offset += 4
         }
 
-        guard buffer.count >= offset + payloadLen else { return nil }
+        guard buffer.count >= offset + payloadLen else { return .needMoreData }
 
         var payloadBytes = Array(buffer[offset..<offset + payloadLen])
         buffer.removeFirst(offset + payloadLen)
@@ -114,16 +139,16 @@ final class WSFrameParser {
 
         switch opcode {
         case 0x01:
-            guard (byte0 & 0x80) != 0 else { return nil }
-            guard let str = String(data: payload, encoding: .utf8) else { return nil }
-            return .text(str)
+            guard fin else { return .protocolError("fragmentation_unsupported") }
+            guard let str = String(data: payload, encoding: .utf8) else { return .protocolError("invalid_utf8") }
+            return .message(.text(str))
         case 0x02:
-            guard (byte0 & 0x80) != 0 else { return nil }
-            return .binary(payload)
-        case 0x09: return .ping
-        case 0x0A: return .pong
-        case 0x08: return .close
-        default:   return nil
+            guard fin else { return .protocolError("fragmentation_unsupported") }
+            return .message(.binary(payload))
+        case 0x09: return .message(.ping)
+        case 0x0A: return .message(.pong)
+        case 0x08: return .message(.close)
+        default:   return .protocolError("unknown_opcode")
         }
     }
 }
@@ -196,7 +221,17 @@ final class WSConnection: Identifiable, @unchecked Sendable {
     }
 
     func processLeftover(_ data: Data) {
-        for msg in frameParser.feed(data) { handleFrameMessage(msg) }
+        ingestFrameData(data)
+    }
+
+    private func ingestFrameData(_ data: Data) {
+        let result = frameParser.feed(data)
+        if let error = result.protocolError {
+            print("[WSConnection] Protocol error from \(remoteAddress): \(error)")
+            close()
+            return
+        }
+        for msg in result.messages { handleFrameMessage(msg) }
     }
 
     private static func extractRemoteAddress(_ conn: NWConnection) -> String {
@@ -216,7 +251,7 @@ final class WSConnection: Identifiable, @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             if let data, !data.isEmpty {
-                for msg in self.frameParser.feed(data) { self.handleFrameMessage(msg) }
+                self.ingestFrameData(data)
             }
             if isComplete || error != nil {
                 self.handleDisconnect()
@@ -323,12 +358,18 @@ actor WebSocketServer {
     private nonisolated func handleTCPConnection(_ nwConn: NWConnection) {
         nwConn.start(queue: listenerQueue)
         var accumulated = Data()
+        let maxUpgradeHeaderBytes = 16 * 1024
 
         func readMore() {
             nwConn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, isComplete, error in
                 guard let self else { return }
 
                 if let data, !data.isEmpty { accumulated.append(data) }
+
+                if accumulated.count > maxUpgradeHeaderBytes {
+                    nwConn.cancel()
+                    return
+                }
 
                 if isComplete || error != nil {
                     nwConn.cancel()

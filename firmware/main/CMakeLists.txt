@@ -1,6 +1,13 @@
 set(SOURCES
     "application.cc"
     "lan_mic_app.cc"
+    "lan_mic_app_utils.cc"
+    "app_net.cc"
+    "app_protocol.cc"
+    "app_input.cc"
+    "app_render.cc"
+    "app_ota.cc"
+    "input/gpio_input_driver.cc"
     "main.cc"
     "settings.cc"
     "system_info.cc"

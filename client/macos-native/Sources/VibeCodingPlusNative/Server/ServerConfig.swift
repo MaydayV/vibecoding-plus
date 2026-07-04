@@ -36,6 +36,7 @@ struct ServerConfig {
     var discoveryEnabled: Bool = true
     var bindHost: String = "0.0.0.0"
     var discoveryHostId: String = "VibeServer"
+    var pairingCode: String = ""
     var lanSharedSecret: String = ""
     var lanAudioMaxBytes: Int = 10_000_000
     var cliTimeoutSec: Double = 300

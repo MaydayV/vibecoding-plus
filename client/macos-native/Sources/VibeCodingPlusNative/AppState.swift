@@ -21,6 +21,8 @@ final class AppState: ObservableObject {
     @Published var inlineStatus = ""
     @Published var isBusy = false
     @Published var serviceRunning = false
+    @Published var pairingCode = ""
+    @Published var otaProgress: [String: (phase: String, pct: Int)] = [:]
 
     private var nativeServer: NativeServer?
     private let settingsStore = SettingsStore()
@@ -82,6 +84,9 @@ final class AppState: ObservableObject {
     // MARK: - Lifecycle
 
     func bootstrap() async {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return
+        }
         await refreshEnvironment()
         if serviceRunning {
             await refreshRuntime()
@@ -301,6 +306,7 @@ final class AppState: ObservableObject {
 
         self.devices = devices.map { dict in
             DeviceInfo(
+                connId: dict["connId"] as? String,
                 deviceId: dict["deviceId"] as? String ?? "unknown",
                 boardType: dict["boardType"] as? String,
                 voiceMode: dict["voiceMode"] as? String,
@@ -326,6 +332,8 @@ final class AppState: ObservableObject {
             list: syncStatusRaw["list"] as? String,
             pollSec: syncStatusRaw["pollSec"] as? Int
         )
+        self.pairingCode = await server.getPairingCode()
+        self.otaProgress = await server.getAllFirmwareOtaProgress()
     }
 
     func discoverDevices() async {
@@ -333,6 +341,40 @@ final class AppState: ObservableObject {
         inlineStatus = "已发送发现请求"
         try? await Task.sleep(for: .seconds(2))
         await refreshRuntime()
+    }
+
+    // MARK: - Device pairing / OTA
+
+    func provisionDevice(_ device: DeviceInfo) async {
+        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
+        await server.provisionSecret(forDeviceId: device.deviceId)
+        inlineStatus = "配对密钥已发送到 \(device.deviceId)"
+    }
+
+    func writePairingNfc(for device: DeviceInfo) async {
+        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
+        await server.writePairingNfc(forDeviceId: device.deviceId)
+        inlineStatus = "NFC 配对 URI 已写入 \(device.deviceId)"
+    }
+
+    func offerFirmware(to device: DeviceInfo) async {
+        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
+        let repoRoot = ProcessInfo.processInfo.environment["VIBE_REPO_ROOT"]
+            ?? FileManager.default.currentDirectoryPath
+        let bin = URL(fileURLWithPath: repoRoot)
+            .appendingPathComponent("firmware/build/xiaozhi.bin")
+        guard FileManager.default.fileExists(atPath: bin.path) else {
+            inlineStatus = "未找到 firmware/build/xiaozhi.bin，请先编译固件"
+            return
+        }
+        do {
+            try await server.offerFirmware(forDeviceId: device.deviceId, binURL: bin)
+            inlineStatus = "固件 OTA 已推送到 \(device.deviceId)"
+        } catch NativeServerError.firmwareUpToDate {
+            inlineStatus = "固件已是最新版本"
+        } catch {
+            inlineStatus = "固件 OTA 失败: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Todo

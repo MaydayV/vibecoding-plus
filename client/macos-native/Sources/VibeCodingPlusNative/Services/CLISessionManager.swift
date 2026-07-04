@@ -36,7 +36,20 @@ final class CodexSessionManager: CLISession {
 
     weak var delegate: CLISessionDelegate?
 
-    private(set) var isRunning = false
+    private let stateLock = NSLock()
+    private var _isRunning = false
+    private(set) var isRunning: Bool {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return _isRunning
+        }
+        set {
+            stateLock.lock()
+            _isRunning = newValue
+            stateLock.unlock()
+        }
+    }
     private(set) var threadId = ""
 
     var process: Process?
@@ -172,8 +185,22 @@ final class ClaudeSessionManager: CLISession {
 
     weak var delegate: CLISessionDelegate?
 
-    private(set) var isRunning = false
+    private let stateLock = NSLock()
+    private var _isRunning = false
+    private(set) var isRunning: Bool {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return _isRunning
+        }
+        set {
+            stateLock.lock()
+            _isRunning = newValue
+            stateLock.unlock()
+        }
+    }
     private(set) var sessionId: String?
+    private var lastCwd: String?
 
     var process: Process?
     var timeoutTimer: DispatchSourceTimer?
@@ -197,11 +224,15 @@ final class ClaudeSessionManager: CLISession {
         isRunning = true
         notifyStatus("Running Claude...")
 
-        // Reset session if CWD changed (mirrors Node.js behavior)
+        let cwd = config.claudeCwd.isEmpty
+            ? FileManager.default.currentDirectoryPath
+            : config.claudeCwd
+
         if let existing = sessionId, !existing.isEmpty,
-           !config.claudeCwd.isEmpty {
+           let last = lastCwd, last != cwd {
             sessionId = nil
         }
+        lastCwd = cwd
 
         let executable = findExecutable(config.claudeCommand)
         var arguments = ["--output-format", "stream-json", "--verbose"]
@@ -214,16 +245,12 @@ final class ClaudeSessionManager: CLISession {
             arguments += ["--max-turns", String(config.claudeMaxTurns)]
         }
 
-        let hasSession = continuationId != nil || (sessionId != nil && !(sessionId?.isEmpty ?? true))
-        if hasSession {
-            arguments.append("--continue")
+        let resumeId = continuationId ?? sessionId
+        if let sid = resumeId, !sid.isEmpty {
+            arguments += ["--resume", sid]
         }
 
         arguments += ["-p", trimmed]
-
-        let cwd = config.claudeCwd.isEmpty
-            ? FileManager.default.currentDirectoryPath
-            : config.claudeCwd
 
         let proc = try spawnProcess(
             executable: executable,

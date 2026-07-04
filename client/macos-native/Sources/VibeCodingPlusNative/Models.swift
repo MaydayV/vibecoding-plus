@@ -135,6 +135,7 @@ struct AppConfig {
 }
 
 struct DeviceInfo: Identifiable, Decodable {
+    var connId: String?
     var deviceId: String
     var boardType: String?
     var voiceMode: String?
