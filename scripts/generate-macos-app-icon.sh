@@ -3,24 +3,26 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ICONSET="$ROOT/client/macos-native/Resources/Assets.xcassets/AppIcon.appiconset"
-SVG="$ICONSET/AppIcon.svg"
+SOURCE="${1:-$ROOT/client/macos-native/Resources/AppIconSources/Default/AppIcon-Default-1024.png}"
 
-if [[ ! -f "$SVG" ]]; then
-  echo "Missing icon source: $SVG" >&2
-  exit 1
-fi
-
-if ! command -v rsvg-convert >/dev/null 2>&1; then
-  echo "rsvg-convert is required (brew install librsvg)" >&2
+if [[ ! -f "$SOURCE" ]]; then
+  echo "Missing icon source PNG: $SOURCE" >&2
   exit 1
 fi
 
 render() {
   local size="$1"
   local out="$ICONSET/AppIcon-${size}.png"
-  rsvg-convert -w "$size" -h "$size" "$SVG" -o "$out"
-  if command -v magick >/dev/null 2>&1; then
-    magick "$out" -background "#FCFAF3" -alpha remove -alpha off "$out"
+  if [[ "$size" -eq 1024 ]]; then
+    cp "$SOURCE" "$out"
+  elif command -v magick >/dev/null 2>&1; then
+    magick "$SOURCE" -resize "${size}x${size}" -background none -gravity center -extent "${size}x${size}" "$out"
+  elif command -v sips >/dev/null 2>&1; then
+    cp "$SOURCE" "$out"
+    sips -z "$size" "$size" "$out" >/dev/null
+  else
+    echo "magick or sips is required to resize icon PNGs" >&2
+    exit 1
   fi
   echo "wrote $out"
 }

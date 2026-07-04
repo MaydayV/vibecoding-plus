@@ -1,56 +1,57 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <!--
-    macOS app icon master (1024×1024).
-    - Square opaque canvas; system applies the squircle mask.
-    - Keep primary artwork inside the 512 px diameter safe circle (~256 px radius).
-    - Do not bake corner radius or transparency into the asset.
+    macOS app icon source.
+    Square opaque asset for Apple's system mask, with a high-contrast e-paper style.
   -->
   <defs>
-    <linearGradient id="bg" x1="96" y1="64" x2="928" y2="960" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FCFAF3"/>
-      <stop offset="0.45" stop-color="#F1EEE4"/>
-      <stop offset="1" stop-color="#D9D4C8"/>
+    <linearGradient id="paper" x1="120" y1="72" x2="888" y2="952" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FBFAF2"/>
+      <stop offset="0.56" stop-color="#EEEDE4"/>
+      <stop offset="1" stop-color="#DAD8CE"/>
     </linearGradient>
-    <radialGradient id="glow" cx="420" cy="300" r="520" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="mark" x1="312" y1="260" x2="712" y2="760" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFFEF9"/>
-      <stop offset="1" stop-color="#ECE7DB"/>
+    <linearGradient id="screen" x1="250" y1="204" x2="770" y2="780" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFDF3"/>
+      <stop offset="1" stop-color="#E9E7DC"/>
     </linearGradient>
-    <filter id="markShadow" x="-20%" y="-16%" width="140%" height="148%">
-      <feDropShadow dx="0" dy="24" stdDeviation="26" flood-color="#151413" flood-opacity="0.20"/>
+    <filter id="screenShadow" x="-12%" y="-12%" width="124%" height="132%">
+      <feDropShadow dx="0" dy="30" stdDeviation="28" flood-color="#121212" flood-opacity="0.22"/>
     </filter>
+    <pattern id="grain" width="18" height="18" patternUnits="userSpaceOnUse">
+      <rect width="18" height="18" fill="none"/>
+      <rect x="2" y="3" width="2" height="2" fill="#1B1A18" opacity="0.08"/>
+      <rect x="11" y="8" width="2" height="2" fill="#1B1A18" opacity="0.05"/>
+      <rect x="6" y="14" width="1.5" height="1.5" fill="#1B1A18" opacity="0.06"/>
+    </pattern>
+    <pattern id="halftone" width="28" height="28" patternUnits="userSpaceOnUse">
+      <rect width="28" height="28" fill="none"/>
+      <circle cx="8" cy="8" r="2.3" fill="#201F1C" opacity="0.13"/>
+      <circle cx="21" cy="19" r="1.7" fill="#201F1C" opacity="0.09"/>
+    </pattern>
   </defs>
 
-  <rect width="1024" height="1024" fill="url(#bg)"/>
-  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <rect width="1024" height="1024" fill="url(#paper)"/>
+  <rect width="1024" height="1024" fill="url(#grain)"/>
+  <path d="M126 160C256 92 396 75 526 116c174 55 310 206 390 380v528H0V296c34-57 76-103 126-136Z" fill="#FFFFFF" opacity="0.28"/>
 
-  <g transform="translate(512 512) scale(0.82) translate(-512 -512)">
-    <g filter="url(#markShadow)">
-      <circle cx="512" cy="500" r="318" fill="url(#mark)"/>
-    </g>
+  <g filter="url(#screenShadow)">
+    <rect x="184" y="194" width="656" height="612" rx="92" fill="#201F1C"/>
+    <rect x="224" y="232" width="576" height="536" rx="66" fill="url(#screen)"/>
+    <rect x="250" y="258" width="524" height="484" rx="44" fill="url(#halftone)" opacity="0.72"/>
+  </g>
 
-    <g fill="none" stroke="#171614" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="468" y="286" width="76" height="118" rx="38" stroke-width="20" fill="#F7F4EC"/>
-      <path d="M494 324h24M494 346h24M494 368h24" stroke-width="10"/>
-      <path d="M448 404c0 35 28 63 64 63s64-28 64-63" stroke-width="18"/>
-      <path d="M512 467v44" stroke-width="18"/>
-      <path d="M472 511h80" stroke-width="18"/>
+  <g fill="none" stroke="#201F1C" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M408 382 318 472l90 90" stroke-width="58"/>
+    <path d="M616 382 706 472l-90 90" stroke-width="58"/>
+    <path d="M478 584 548 360" stroke-width="48"/>
+  </g>
 
-      <path d="M356 548 286 628l70 80" stroke-width="52"/>
-      <path d="M668 548 738 628l-70 80" stroke-width="52"/>
-      <path d="M448 700 512 520 576 700" stroke-width="42"/>
+  <g fill="none" stroke="#201F1C" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M334 636h84l38-72 58 146 50-116 38 42h96" stroke-width="34"/>
+  </g>
 
-      <path d="M318 742c48-42 78 34 126-8s78 34 126-8 78 34 126-8 78 34 126-8" stroke-width="34"/>
-    </g>
-
-    <circle cx="548" cy="312" r="17" fill="#D93025"/>
-
-    <g>
-      <circle cx="704" cy="704" r="62" fill="#171614"/>
-      <path d="M704 668v72M668 704h72" fill="none" stroke="#FCFAF3" stroke-width="24" stroke-linecap="round"/>
-    </g>
+  <g>
+    <circle cx="724" cy="718" r="98" fill="#F3F0E7" stroke="#201F1C" stroke-width="28"/>
+    <path d="M724 660v116M666 718h116" fill="none" stroke="#201F1C" stroke-width="36" stroke-linecap="round"/>
+    <circle cx="778" cy="660" r="20" fill="#B3261E"/>
   </g>
 </svg>
