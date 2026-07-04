@@ -16,13 +16,6 @@ esac
 
 mkdir -p "$APP_OUTPUT_DIR"
 
-ICON_DIR="$NATIVE_DIR/Resources/Assets.xcassets/AppIcon.appiconset"
-if command -v rsvg-convert >/dev/null 2>&1 && [[ -f "$ICON_DIR/AppIcon.svg" ]]; then
-  for size in 16 32 64 128 256 512 1024; do
-    rsvg-convert -w "$size" -h "$size" "$ICON_DIR/AppIcon.svg" -o "$ICON_DIR/AppIcon-${size}.png"
-  done
-fi
-
 if command -v xcodegen >/dev/null 2>&1; then
   (cd "$NATIVE_DIR" && xcodegen generate)
 else

@@ -17,6 +17,8 @@ sleep 1
 rm -rf "$DEST"
 ditto "$SRC" "$DEST"
 xattr -cr "$DEST" 2>/dev/null || true
+touch "$DEST"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST" 2>/dev/null || true
 
 echo "Installed: $DEST"
 echo ""
