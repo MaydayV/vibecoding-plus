@@ -15,3 +15,4 @@ using FirmwareOtaProgressFn = std::function<void(const char* phase, int pct, con
 
 bool StartFirmwareOta(const FirmwareOtaOffer& offer, FirmwareOtaProgressFn progress);
 bool IsFirmwareOtaRunning();
+bool ConfirmRunningFirmware();

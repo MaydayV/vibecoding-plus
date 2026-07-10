@@ -236,3 +236,32 @@ bool StartFirmwareOta(const FirmwareOtaOffer& offer, FirmwareOtaProgressFn progr
 bool IsFirmwareOtaRunning() {
     return g_running.load();
 }
+
+bool ConfirmRunningFirmware() {
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (running == nullptr) {
+        ESP_LOGW(kTag, "Cannot confirm OTA state: running partition missing");
+        return false;
+    }
+
+    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+    const esp_err_t state_err = esp_ota_get_state_partition(running, &state);
+    if (state_err != ESP_OK) {
+        ESP_LOGW(kTag, "Read running partition state failed: %s", esp_err_to_name(state_err));
+        return false;
+    }
+
+    if (state != ESP_OTA_IMG_PENDING_VERIFY) {
+        return true;
+    }
+
+    const esp_err_t confirm_err = esp_ota_mark_app_valid_cancel_rollback();
+    if (confirm_err != ESP_OK) {
+        ESP_LOGE(kTag, "Confirm OTA image failed: %s", esp_err_to_name(confirm_err));
+        esp_ota_mark_app_invalid_rollback_and_reboot();
+        return false;
+    }
+
+    ESP_LOGI(kTag, "Confirmed pending OTA image");
+    return true;
+}

@@ -228,14 +228,18 @@ actor NativeServer {
         let remoteIP = conn.remoteAddress.components(separatedBy: ":").first ?? "127.0.0.1"
         let localIP = await discoveryServer.localAddress(forRemoteIP: remoteIP) ?? "127.0.0.1"
         let (sha256, size) = try firmwareOtaHost.start(binURL: binURL)
-        let version = binURL.deletingPathExtension().lastPathComponent
+        let version = resolveFirmwareVersion(binURL: binURL)
+        firmwareOtaProgress[state.deviceId] = ("检查版本", 0)
 
-        sendJson(to: conn, [
+        var checkPayload: [String: Any] = [
             "type": LANServerMessage.firmware_check,
-            "version": version,
             "sha256": sha256,
             "size": size,
-        ])
+        ]
+        if let version, !version.isEmpty {
+            checkPayload["version"] = version
+        }
+        sendJson(to: conn, checkPayload)
 
         let deviceId = state.deviceId
         let needUpgrade = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
@@ -249,17 +253,21 @@ actor NativeServer {
         }
 
         guard needUpgrade else {
-            appendServiceLog("固件已是最新: \(deviceId) (\(version))")
+            firmwareOtaProgress[deviceId] = ("已是最新", 100)
+            appendServiceLog("固件已是最新: \(deviceId) (\(version ?? binURL.lastPathComponent))")
             throw NativeServerError.firmwareUpToDate
         }
 
-        sendJson(to: conn, [
+        var offerPayload: [String: Any] = [
             "type": LANServerMessage.firmware_offer,
             "url": "http://\(localIP):8767/firmware.bin",
-            "version": version,
             "sha256": sha256,
             "size": size,
-        ])
+        ]
+        if let version, !version.isEmpty {
+            offerPayload["version"] = version
+        }
+        sendJson(to: conn, offerPayload)
         appendServiceLog("固件 OTA 提供: \(binURL.lastPathComponent) → \(localIP):8767")
     }
 
@@ -548,7 +556,8 @@ actor NativeServer {
             let ok = (message["ok"] as? Bool) ?? false
             let version = (message["version"] as? String) ?? ""
             let note = (message["message"] as? String) ?? ""
-            firmwareOtaProgress.removeValue(forKey: deviceId)
+            let finalPct = ok ? 100 : (firmwareOtaProgress[deviceId]?.pct ?? 0)
+            firmwareOtaProgress[deviceId] = (ok ? "完成" : "失败", finalPct)
             appendServiceLog("OTA 完成 \(deviceId): ok=\(ok) version=\(version) \(note)")
 
         case LANDeviceMessage.firmware_check_result:
@@ -621,8 +630,10 @@ actor NativeServer {
         sendJson(to: conn, ["type": LANServerMessage.hello_ack, "deviceId": state.deviceId, "protocolVersion": LANProtocol.version])
         emitServerReady(to: conn)
         broadcastDisplayConfig(to: conn)
-        emitCliSnapshot(to: conn)
-        await emitTodoState(to: conn)
+        if authenticated {
+            emitCliSnapshot(to: conn)
+            await emitTodoState(to: conn)
+        }
 
         // Broadcast device_event to all other connected clients
         broadcastJson([
@@ -1829,6 +1840,25 @@ actor NativeServer {
             "type": LANServerMessage.cli_log_tail,
             "lines": cliView.logLines
         ])
+    }
+
+    private func resolveFirmwareVersion(binURL: URL) -> String? {
+        let metadataURL = binURL.deletingLastPathComponent().appendingPathComponent("project_description.json")
+        guard let data = try? Data(contentsOf: metadataURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        let candidates = ["project_version", "app_version", "version"]
+        for key in candidates {
+            if let raw = json[key] as? String {
+                let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return value
+                }
+            }
+        }
+        return nil
     }
 
     private func emitPlanOptions(to conn: WSConnection, state: ClientState) {

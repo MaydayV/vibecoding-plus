@@ -214,10 +214,10 @@ final class WSConnection: Identifiable, @unchecked Sendable {
     }
 
     func close() {
-        guard isOpen else { return }
-        isOpen = false
+        guard markClosed() else { return }
         sendRaw(WSEncoder.encode(opcode: .close, payload: Data()))
         connection.cancel()
+        onDisconnect?()
     }
 
     func processLeftover(_ data: Data) {
@@ -272,9 +272,18 @@ final class WSConnection: Identifiable, @unchecked Sendable {
     }
 
     private func handleDisconnect() {
-        guard isOpen else { return }
-        isOpen = false
+        guard markClosed() else { return }
         onDisconnect?()
+    }
+
+    private func markClosed() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if !_isOpen {
+            return false
+        }
+        _isOpen = false
+        return true
     }
 }
 

@@ -44,15 +44,25 @@ struct DevicesView: View {
     private var pairingBanner: some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Host: \(state.config.discoveryHostId) · 配对码")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(state.pairingCode.isEmpty ? "------" : state.pairingCode)
-                    .font(.title2.monospaced().weight(.bold))
-                    .textSelection(.enabled)
+                if state.config.lanSharedSecret.isEmpty {
+                    Text("Host: \(state.config.discoveryHostId) · 局域网直连")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("无需输入配对码")
+                        .font(.title3.weight(.bold))
+                } else {
+                    Text("Host: \(state.config.discoveryHostId) · 核对码")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(state.pairingCode.isEmpty ? "------" : state.pairingCode)
+                        .font(.title2.monospaced().weight(.bold))
+                        .textSelection(.enabled)
+                }
             }
             Spacer()
-            Text("设备连上后点「确认配对」下发密钥。未连 Wi‑Fi 时碰 NFC 进配网；已有 Wi‑Fi 未连 Mac 时碰 NFC 打开手机配对说明页（:8768/pair）。")
+            Text(state.config.lanSharedSecret.isEmpty
+                 ? "当前未启用 LAN 密钥。设备连上即生效；NFC 打开的是连接说明页，不需要再输入配对码或确认配对。"
+                 : "核对码当前只用于人工确认，不需要输入到手机或设备。设备连上后，在下方点「下发密钥」完成密钥下发。")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: 360, alignment: .leading)
@@ -104,17 +114,32 @@ struct DeviceCard: View {
             Text("设备操作")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+            if state.config.lanSharedSecret.isEmpty {
+                Text("当前为直连模式")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+            } else {
+                Button {
+                    Task { await state.provisionDevice(device) }
+                } label: {
+                    Label(device.isProvisioned ? "已下发密钥" : "下发密钥", systemImage: "key.fill")
+                }
+                .inkButton()
+                .disabled(device.isProvisioned)
+            }
             Button {
-                Task { await state.provisionDevice(device) }
+                Task { await state.offerBuiltFirmware(to: device) }
             } label: {
-                Label(device.isProvisioned ? "已配对" : "确认配对", systemImage: "key.fill")
+                Label("推送当前构建", systemImage: "arrow.down.circle")
             }
             .inkButton()
-            .disabled(device.isProvisioned)
             Button {
-                Task { await state.offerFirmware(to: device) }
+                state.chooseFirmwareFile(for: device)
             } label: {
-                Label("固件 OTA", systemImage: "arrow.down.circle")
+                Label("选择固件", systemImage: "folder")
             }
             .inkButton()
             Spacer()

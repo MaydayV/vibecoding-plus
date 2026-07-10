@@ -88,9 +88,18 @@ final class LanSetupHttpHost {
     }
 
     private func renderPairPage(_ info: PairingPageInfo) -> String {
-        let secretNote = info.hasSharedSecret
-            ? "Mac 客户端已启用 LAN 密钥。设备连上后，在「设备」页点「确认配对」下发密钥。"
-            : "请先在 Mac 客户端设置中配置 LAN_SHARED_SECRET，再为设备确认配对。"
+        let headline = info.hasSharedSecret ? "墨水屏设备 · 连接此 Mac" : "墨水屏设备 · 局域网直连"
+        let codeCard = info.hasSharedSecret
+            ? """
+              <div class="card">
+                <div>核对码（仅供人工确认，不需要输入）</div>
+                <div class="code">\(escapeHTML(info.pairCode))</div>
+              </div>
+              """
+            : ""
+        let setupNote = info.hasSharedSecret
+            ? "当前版本不会在手机或设备上输入配对码。手机打开本页后，只用于确认正在连接哪台 Mac；设备连上后，请回到 Mac 客户端「设备」页点「下发密钥」。"
+            : "当前为无密钥局域网模式。设备连上这台 Mac 后立即可用，不需要输入配对码，也不需要额外确认配对。"
         return """
         <!doctype html>
         <html lang="zh-CN">
@@ -108,21 +117,18 @@ final class LanSetupHttpHost {
           </style>
         </head>
         <body>
-          <h1>墨水屏设备 · 连接此 Mac</h1>
+          <h1>\(headline)</h1>
           <p>Host ID：<strong>\(escapeHTML(info.hostId))</strong><br/>
              主机：<strong>\(escapeHTML(info.hostName))</strong></p>
-          <div class="card">
-            <div>配对码（供核对）</div>
-            <div class="code">\(escapeHTML(info.pairCode))</div>
-          </div>
+          \(codeCard)
           <div class="card">
             <strong>NFC 碰一碰是干什么的？</strong>
             <ol>
               <li><strong>还没连 Wi‑Fi</strong>：NFC 打开设备配网页，先配置 Wi‑Fi。</li>
-              <li><strong>已有 Wi‑Fi、未连 Mac</strong>：NFC 打开本页；设备会自动发现 Mac，然后在 Mac 客户端「设备」里点「确认配对」。</li>
+              <li><strong>已有 Wi‑Fi、未连 Mac</strong>：NFC 打开本页；设备会自动发现 Mac。</li>
               <li><strong>已经连上 Mac</strong>：无需再碰 NFC 配对。</li>
             </ol>
-            <p>\(escapeHTML(secretNote))</p>
+            <p>\(escapeHTML(setupNote))</p>
           </div>
         </body>
         </html>

@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 
 #include "application.h"
+#include "app_ota.h"
 #include "lan_mic_app.h"
 #include "system_info.h"
 
@@ -66,6 +67,7 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     LogNvsStats();
+    ConfirmRunningFirmware();
 
 #if CONFIG_ZECTRIX_LAN_MIC_MODE
     LanMicApp app;

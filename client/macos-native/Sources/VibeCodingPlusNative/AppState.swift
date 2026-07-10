@@ -3,6 +3,7 @@ import Combine
 import Foundation
 import ServiceManagement
 import UserNotifications
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppState: ObservableObject {
@@ -349,22 +350,21 @@ final class AppState: ObservableObject {
     func provisionDevice(_ device: DeviceInfo) async {
         guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
         if device.isProvisioned {
-            inlineStatus = "设备已配对，无需重复操作"
+            inlineStatus = "设备已下发密钥，无需重复操作"
             return
         }
         guard !config.lanSharedSecret.isEmpty else {
-            inlineStatus = "请先在设置中配置 LAN_SHARED_SECRET"
+            inlineStatus = "当前为无密钥模式，无需下发密钥"
             return
         }
         let ok = await server.provisionSecret(forDeviceId: device.deviceId)
         inlineStatus = ok
-            ? "配对密钥已发送到 \(device.deviceId)"
-            : "配对失败：设备未连接或未通过认证"
+            ? "LAN 密钥已发送到 \(device.deviceId)"
+            : "下发密钥失败：设备未连接或未通过认证"
         await refreshRuntime()
     }
 
-    func offerFirmware(to device: DeviceInfo) async {
-        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
+    func offerBuiltFirmware(to device: DeviceInfo) async {
         let repoRoot = ProcessInfo.processInfo.environment["VIBE_REPO_ROOT"]
             ?? FileManager.default.currentDirectoryPath
         let bin = URL(fileURLWithPath: repoRoot)
@@ -373,9 +373,30 @@ final class AppState: ObservableObject {
             inlineStatus = "未找到 firmware/build/xiaozhi.bin，请先编译固件"
             return
         }
+        await offerFirmware(to: device, binURL: bin)
+    }
+
+    func chooseFirmwareFile(for device: DeviceInfo) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.data]
+        panel.prompt = "选择固件"
+        if panel.runModal() == .OK, let url = panel.url {
+            guard url.pathExtension.lowercased() == "bin" else {
+                inlineStatus = "请选择 .bin 固件文件"
+                return
+            }
+            Task { await offerFirmware(to: device, binURL: url) }
+        }
+    }
+
+    private func offerFirmware(to device: DeviceInfo, binURL: URL) async {
+        guard let server = nativeServer else { inlineStatus = "请先启动服务"; return }
         do {
-            try await server.offerFirmware(forDeviceId: device.deviceId, binURL: bin)
-            inlineStatus = "固件 OTA 已推送到 \(device.deviceId)"
+            try await server.offerFirmware(forDeviceId: device.deviceId, binURL: binURL)
+            inlineStatus = "固件 OTA 已推送到 \(device.deviceId)：\(binURL.lastPathComponent)"
         } catch NativeServerError.firmwareUpToDate {
             inlineStatus = "固件已是最新版本"
         } catch {
