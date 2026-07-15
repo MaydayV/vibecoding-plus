@@ -227,14 +227,14 @@ actor RemindersSync {
                         continue
                     }
                     try editReminder(appleId: appleId, title: item.title)
-                    await todoService.markItemSynced(id: item.id, appleId: appleId)
+                    await todoService.markItemSynced(id: item.id, service: .reminders, remoteId: appleId)
                 } else if !item.completed {
                     let newId = try createReminder(
                         title: item.title,
                         dueDate: parseIsoDate(item.dueAt),
                         listName: defaultList
                     )
-                    await todoService.markItemSynced(id: item.id, appleId: newId)
+                    await todoService.markItemSynced(id: item.id, service: .reminders, remoteId: newId)
                 }
             } catch {
                 print("[RemindersSync] push failed for \(item.id): \(error)")

@@ -20,6 +20,9 @@ struct TodoView: View {
                         if state.syncStatus?.enabled == true {
                             StatusBadge(text: "同步开启", active: true)
                         }
+                        if state.tickTickSyncStatus?.enabled == true {
+                            StatusBadge(text: "TickTick", active: true)
+                        }
                         Text("\(state.todos.count) 进行中")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
@@ -243,6 +246,11 @@ struct TodoRow: View {
                                 Label("提醒", systemImage: "bell.fill")
                                     .font(.caption)
                                     .foregroundStyle(InkTheme.ink)
+                            }
+                            if item.ticktickId != nil {
+                                Label("TickTick", systemImage: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.blue)
                             }
                         }
                     }

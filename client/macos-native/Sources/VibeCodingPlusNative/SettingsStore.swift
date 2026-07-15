@@ -47,6 +47,10 @@ struct SettingsStore {
         config.remindersSyncEnabled = values["REMINDERS_SYNC_ENABLED"] == "1" || values["REMINDERS_SYNC_ENABLED"]?.lowercased() == "true"
         config.remindersListName = values["REMINDERS_LIST"] ?? ""
         config.remindersPollSec = Int(values["REMINDERS_POLL_SEC"] ?? "") ?? 15
+        config.tickTickSyncEnabled = values["TICKTICK_SYNC_ENABLED"] == "1" || values["TICKTICK_SYNC_ENABLED"]?.lowercased() == "true"
+        config.tickTickAccessToken = values["TICKTICK_ACCESS_TOKEN"] ?? ""
+        config.tickTickProjectId = values["TICKTICK_PROJECT_ID"] ?? ""
+        config.tickTickPollSec = Int(values["TICKTICK_POLL_SEC"] ?? "") ?? 60
         config.displayTodoRefreshMs = Int(values["DISPLAY_TODO_REFRESH_MS"] ?? "") ?? 2000
         config.displayCodingRefreshMs = Int(values["DISPLAY_CODING_REFRESH_MS"] ?? "") ?? 2000
         config.displayStyle = values["DISPLAY_STYLE"] ?? "light"
@@ -112,6 +116,10 @@ struct SettingsStore {
         values["REMINDERS_SYNC_ENABLED"] = config.remindersSyncEnabled ? "1" : nil
         values["REMINDERS_LIST"] = nilIfEmpty(config.remindersListName)
         values["REMINDERS_POLL_SEC"] = config.remindersPollSec != 15 ? String(config.remindersPollSec) : nil
+        values["TICKTICK_SYNC_ENABLED"] = config.tickTickSyncEnabled ? "1" : nil
+        values["TICKTICK_ACCESS_TOKEN"] = nilIfEmpty(config.tickTickAccessToken)
+        values["TICKTICK_PROJECT_ID"] = nilIfEmpty(config.tickTickProjectId)
+        values["TICKTICK_POLL_SEC"] = config.tickTickPollSec != 60 ? String(config.tickTickPollSec) : nil
         values["DISPLAY_TODO_REFRESH_MS"] = config.displayTodoRefreshMs != 2000 ? String(config.displayTodoRefreshMs) : nil
         values["DISPLAY_CODING_REFRESH_MS"] = config.displayCodingRefreshMs != 2000 ? String(config.displayCodingRefreshMs) : nil
         values["DISPLAY_STYLE"] = config.displayStyle != "light" ? config.displayStyle : nil

@@ -91,6 +91,13 @@ struct ServerConfig {
     var remindersListName: String = ""
     var remindersPollSec: Int = 15
 
+    // MARK: - TickTick
+
+    var tickTickSyncEnabled: Bool = false
+    var tickTickAccessToken: String = ""
+    var tickTickProjectId: String = ""
+    var tickTickPollSec: Int = 60
+
     // MARK: - Display
 
     var displayTodoRefreshMs: Int = 2000
@@ -318,6 +325,12 @@ private extension ServerConfig {
         c.remindctlPath = v["REMINDCTL_PATH"] ?? c.remindctlPath
         c.remindersListName = v["REMINDERS_LIST"] ?? ""
         c.remindersPollSec = positiveInt(v["REMINDERS_POLL_SEC"], fallback: c.remindersPollSec)
+
+        // TickTick
+        c.tickTickSyncEnabled = isTruthy(v["TICKTICK_SYNC_ENABLED"])
+        c.tickTickAccessToken = v["TICKTICK_ACCESS_TOKEN"] ?? ""
+        c.tickTickProjectId = v["TICKTICK_PROJECT_ID"] ?? ""
+        c.tickTickPollSec = positiveInt(v["TICKTICK_POLL_SEC"], fallback: c.tickTickPollSec)
 
         // Display
         c.displayTodoRefreshMs = clampRefreshMs(v["DISPLAY_TODO_REFRESH_MS"], fallback: c.displayTodoRefreshMs)

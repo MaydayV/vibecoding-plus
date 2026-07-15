@@ -17,6 +17,8 @@ final class AppState: ObservableObject {
     @Published var syncStatus: ReminderSyncStatus?
     @Published var displayConfig = DisplayConfig()
     @Published var reminderLists: [ReminderListInfo] = []
+    @Published var tickTickProjects: [TickTickProjectInfo] = []
+    @Published var tickTickSyncStatus: TickTickSyncStatus?
     @Published var liveActivity = LiveActivity()
     @Published var installLog = ""
     @Published var inlineStatus = ""
@@ -76,6 +78,10 @@ final class AppState: ObservableObject {
         sc.remindersSyncEnabled = config.remindersSyncEnabled
         sc.remindersListName = config.remindersListName
         sc.remindersPollSec = config.remindersPollSec
+        sc.tickTickSyncEnabled = config.tickTickSyncEnabled
+        sc.tickTickAccessToken = config.tickTickAccessToken
+        sc.tickTickProjectId = config.tickTickProjectId
+        sc.tickTickPollSec = config.tickTickPollSec
         sc.displayTodoRefreshMs = config.displayTodoRefreshMs
         sc.displayCodingRefreshMs = config.displayCodingRefreshMs
         sc.displayStyle = config.displayStyle
@@ -303,6 +309,7 @@ final class AppState: ObservableObject {
         let status = await server.getServiceStatus()
         let todoSnap = await server.getTodoSnapshot()
         let syncStatusRaw = await server.getSyncStatus()
+        let tickTickStatusRaw = await server.getTickTickSyncStatus()
         let dc = await server.getDisplayConfig()
 
         self.devices = devices.map { dict in
@@ -333,6 +340,14 @@ final class AppState: ObservableObject {
             lastError: syncStatusRaw["lastError"] as? String,
             list: syncStatusRaw["list"] as? String,
             pollSec: syncStatusRaw["pollSec"] as? Int
+        )
+        self.tickTickSyncStatus = TickTickSyncStatus(
+            enabled: tickTickStatusRaw["enabled"] as? Bool,
+            lastSyncAt: tickTickStatusRaw["lastSyncAt"] as? Double,
+            syncCount: tickTickStatusRaw["syncCount"] as? Int,
+            lastError: tickTickStatusRaw["lastError"] as? String,
+            projectId: tickTickStatusRaw["projectId"] as? String,
+            pollSec: tickTickStatusRaw["pollSec"] as? Int
         )
         self.pairingCode = await server.getPairingCode()
         self.otaProgress = await server.getAllFirmwareOtaProgress()
@@ -467,6 +482,30 @@ final class AppState: ObservableObject {
         try? settingsStore.saveConfig(config)
         await nativeServer?.updateReminderSyncConfig(enabled: enabled, list: list, pollSec: pollSec)
         inlineStatus = enabled ? "同步配置已保存并启用" : "同步配置已保存并停用"
+        await refreshRuntime()
+    }
+
+    // MARK: - TickTick Sync
+
+    func runTickTickSync() async {
+        await nativeServer?.runTickTickSyncNow()
+        inlineStatus = "TickTick 同步已执行"
+        await refreshRuntime()
+    }
+
+    func fetchTickTickProjects() async {
+        guard let server = nativeServer else { return }
+        tickTickProjects = await server.getTickTickProjects()
+    }
+
+    func saveTickTickSyncConfig(enabled: Bool, token: String, projectId: String, pollSec: Int) async {
+        config.tickTickSyncEnabled = enabled
+        config.tickTickAccessToken = token
+        config.tickTickProjectId = projectId
+        config.tickTickPollSec = pollSec
+        try? settingsStore.saveConfig(config)
+        await nativeServer?.updateTickTickSyncConfig(enabled: enabled, token: token, projectId: projectId, pollSec: pollSec)
+        inlineStatus = enabled ? "TickTick 同步配置已保存并启用" : "TickTick 同步配置已保存并停用"
         await refreshRuntime()
     }
 

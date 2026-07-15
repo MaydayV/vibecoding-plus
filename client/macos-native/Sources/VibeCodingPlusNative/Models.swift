@@ -130,6 +130,10 @@ struct AppConfig {
     var remindersSyncEnabled: Bool = false
     var remindersListName: String = ""
     var remindersPollSec: Int = 15
+    var tickTickSyncEnabled: Bool = false
+    var tickTickAccessToken: String = ""
+    var tickTickProjectId: String = ""
+    var tickTickPollSec: Int = 60
     var displayTodoRefreshMs: Int = 2000
     var displayCodingRefreshMs: Int = 2000
     var displayStyle: String = "light"
@@ -160,6 +164,8 @@ struct TodoItem: Identifiable, Decodable {
     var completed: Bool
     var dueAt: String?
     var appleId: String?
+    var ticktickId: String?
+    var ticktickProjectId: String?
 }
 
 struct ServiceStatusPayload: Decodable {
@@ -187,6 +193,21 @@ struct ReminderListInfo: Identifiable, Decodable {
     var title: String
     var reminderCount: Int
     var overdueCount: Int
+}
+
+struct TickTickProjectInfo: Identifiable, Decodable, Sendable {
+    var id: String
+    var title: String
+    var taskCount: Int
+}
+
+struct TickTickSyncStatus: Decodable {
+    var enabled: Bool?
+    var lastSyncAt: Double?
+    var syncCount: Int?
+    var lastError: String?
+    var projectId: String?
+    var pollSec: Int?
 }
 
 struct DisplayConfig {

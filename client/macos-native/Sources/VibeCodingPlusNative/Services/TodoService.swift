@@ -13,6 +13,11 @@ private let defaultTodoTitles = [
 
 // MARK: - Todo Item Data
 
+enum SyncService: String, Sendable {
+    case reminders
+    case ticktick
+}
+
 struct TodoItemData: Codable, Identifiable, Sendable {
     var id: String
     var title: String
@@ -21,10 +26,13 @@ struct TodoItemData: Codable, Identifiable, Sendable {
     var updatedAt: Double       // epoch ms
     var completedAt: Double?    // epoch ms
     var dueAt: String?          // ISO 8601
-    var source: String?         // "local", "seed", "apple"
+    var source: String?         // "local", "seed", "apple", "ticktick"
     var appleId: String?
-    var syncUpdatedAt: Double?  // epoch ms — last Apple Reminders sync time
-    var dirty: Bool             // needs sync to Reminders
+    var ticktickId: String?
+    var ticktickProjectId: String?
+    var syncUpdatedAt: Double?  // epoch ms — last Reminders sync time
+    var ticktickSyncUpdatedAt: Double? // epoch ms — last TickTick sync time
+    var dirty: Bool             // generic local-changed flag
 }
 
 // MARK: - Todo Snapshot
@@ -92,7 +100,10 @@ actor TodoService {
             dueAt: dueAt,
             source: "local",
             appleId: nil,
+            ticktickId: nil,
+            ticktickProjectId: nil,
             syncUpdatedAt: nil,
+            ticktickSyncUpdatedAt: nil,
             dirty: true
         )
         items.append(item)
@@ -243,18 +254,29 @@ actor TodoService {
         return value
     }
 
-    func getDirtySyncItems() -> [TodoItemData] {
+    func getDirtySyncItems(for service: SyncService = .reminders) -> [TodoItemData] {
         (items + archiveItems).filter { item in
             let src = item.source ?? "local"
             if src == "seed" { return false }
-            guard let appleId = item.appleId, !appleId.isEmpty else {
-                return src == "local"
+
+            switch service {
+            case .reminders:
+                guard let appleId = item.appleId, !appleId.isEmpty else {
+                    return src == "local"
+                }
+                if src == "local" { return true }
+                let updatedAt = item.updatedAt
+                let syncedAt = item.syncUpdatedAt ?? 0
+                return updatedAt > syncedAt
+            case .ticktick:
+                guard let ticktickId = item.ticktickId, !ticktickId.isEmpty else {
+                    return src == "local"
+                }
+                if src == "local" { return true }
+                let updatedAt = item.updatedAt
+                let syncedAt = item.ticktickSyncUpdatedAt ?? 0
+                return updatedAt > syncedAt
             }
-            // Has appleId: dirty if local changes newer than last sync
-            if src == "local" { return true }
-            let updatedAt = item.updatedAt
-            let syncedAt = item.syncUpdatedAt ?? 0
-            return updatedAt > syncedAt
         }
     }
 
@@ -320,7 +342,10 @@ actor TodoService {
             dueAt: dueDate,
             source: "apple",
             appleId: appleId,
+            ticktickId: nil,
+            ticktickProjectId: nil,
             syncUpdatedAt: now,
+            ticktickSyncUpdatedAt: nil,
             dirty: false
         )
         if completed {
@@ -334,27 +359,37 @@ actor TodoService {
         emitChange()
     }
 
-    func markItemSynced(id: String, appleId: String) {
+    func markItemSynced(id: String, service: SyncService, remoteId: String, projectId: String? = nil) {
         let now = epochMs()
         var changed = false
         if let idx = items.firstIndex(where: { $0.id == id }) {
-            items[idx].appleId = appleId
-            items[idx].source = "apple"
-            items[idx].syncUpdatedAt = now
-            items[idx].dirty = false
+            applySyncedFields(&items[idx], service: service, remoteId: remoteId, projectId: projectId, now: now)
             save()
             changed = true
         }
         if let idx = archiveItems.firstIndex(where: { $0.id == id }) {
-            archiveItems[idx].appleId = appleId
-            archiveItems[idx].source = "apple"
-            archiveItems[idx].syncUpdatedAt = now
-            archiveItems[idx].dirty = false
+            applySyncedFields(&archiveItems[idx], service: service, remoteId: remoteId, projectId: projectId, now: now)
             save()
             changed = true
         }
         if changed {
             emitChange()
+        }
+    }
+
+    private func applySyncedFields(_ item: inout TodoItemData, service: SyncService, remoteId: String, projectId: String?, now: Double) {
+        switch service {
+        case .reminders:
+            item.appleId = remoteId
+            item.source = "apple"
+            item.syncUpdatedAt = now
+            item.dirty = false
+        case .ticktick:
+            item.ticktickId = remoteId
+            if let projectId { item.ticktickProjectId = projectId }
+            item.source = "ticktick"
+            item.ticktickSyncUpdatedAt = now
+            item.dirty = false
         }
     }
 
@@ -373,6 +408,106 @@ actor TodoService {
         guard items.count + archiveItems.count != before else { return }
         clampSelectedIndex()
         lastActionText = "苹果待办已同步"
+        save()
+        emitChange()
+    }
+
+    // MARK: - TickTick Integration
+
+    func applyRemoteTickTickTask(ticktickId: String, projectId: String, title: String, dueDate: String?, completed: Bool) {
+        let now = epochMs()
+
+        // Find existing item by ticktickId
+        if let idx = items.firstIndex(where: { $0.ticktickId == ticktickId }) {
+            items[idx].title = title
+            items[idx].completed = completed
+            items[idx].dueAt = dueDate
+            items[idx].source = "ticktick"
+            items[idx].updatedAt = now
+            items[idx].ticktickSyncUpdatedAt = now
+            items[idx].ticktickProjectId = projectId
+            if completed {
+                items[idx].completedAt = now
+            } else {
+                items[idx].completedAt = nil
+            }
+            items[idx].dirty = false
+            lastActionText = "TickTick 已同步"
+            clampSelectedIndex()
+            save()
+            emitChange()
+            return
+        }
+
+        // Also check archive
+        if let idx = archiveItems.firstIndex(where: { $0.ticktickId == ticktickId }) {
+            archiveItems[idx].title = title
+            archiveItems[idx].completed = completed
+            archiveItems[idx].dueAt = dueDate
+            archiveItems[idx].source = "ticktick"
+            archiveItems[idx].updatedAt = now
+            archiveItems[idx].ticktickSyncUpdatedAt = now
+            archiveItems[idx].ticktickProjectId = projectId
+            archiveItems[idx].completedAt = completed ? now : nil
+            archiveItems[idx].dirty = false
+
+            // If uncompleted, move back to active
+            if !completed {
+                var item = archiveItems.remove(at: idx)
+                item.completed = false
+                item.completedAt = nil
+                items.append(item)
+            }
+            lastActionText = "TickTick 已同步"
+            clampSelectedIndex()
+            save()
+            emitChange()
+            return
+        }
+
+        // Create new item from remote
+        let item = TodoItemData(
+            id: makeId(),
+            title: title,
+            completed: completed,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: completed ? now : nil,
+            dueAt: dueDate,
+            source: "ticktick",
+            appleId: nil,
+            ticktickId: ticktickId,
+            ticktickProjectId: projectId,
+            syncUpdatedAt: nil,
+            ticktickSyncUpdatedAt: now,
+            dirty: false
+        )
+        if completed {
+            archiveItems.insert(item, at: 0)
+        } else {
+            items.append(item)
+            if selectedIndex < 0 { selectedIndex = 0 }
+        }
+        lastActionText = "TickTick 已同步"
+        save()
+        emitChange()
+    }
+
+    func pruneRemoteMissingTickTickIds(validIds: Set<String>) {
+        let before = items.count + archiveItems.count
+        items.removeAll { item in
+            guard let ticktickId = item.ticktickId, !ticktickId.isEmpty else { return false }
+            if item.source == "local" { return false }
+            return !validIds.contains(ticktickId)
+        }
+        archiveItems.removeAll { item in
+            guard let ticktickId = item.ticktickId, !ticktickId.isEmpty else { return false }
+            if item.source == "local" { return false }
+            return !validIds.contains(ticktickId)
+        }
+        guard items.count + archiveItems.count != before else { return }
+        clampSelectedIndex()
+        lastActionText = "TickTick 已同步"
         save()
         emitChange()
     }
@@ -444,7 +579,10 @@ actor TodoService {
                 dueAt: nil,
                 source: "seed",
                 appleId: nil,
+                ticktickId: nil,
+                ticktickProjectId: nil,
                 syncUpdatedAt: nil,
+                ticktickSyncUpdatedAt: nil,
                 dirty: false
             )
         }

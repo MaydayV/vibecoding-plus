@@ -72,6 +72,7 @@ actor NativeServer {
     private let discoveryServer = DiscoveryServer()
     private let sttService: STTService
     private let remindersSync = RemindersSync()
+    private let tickTickSync = TickTickSync(config: ServerConfig())
     private let todoAssistant: TodoAssistant
     private var todoService: TodoService!
     private let textInjector = TextInjector.self
@@ -159,6 +160,13 @@ actor NativeServer {
             await remindersSync.startPeriodicSync(todoService: todoService, config: config)
         }
 
+        // Start TickTick sync if enabled
+        if config.tickTickSyncEnabled, !config.tickTickAccessToken.isEmpty {
+            await tickTickSync.updateConfig(config)
+            await tickTickSync.sync(todoService: todoService)
+            await tickTickSync.startPeriodicSync(todoService: todoService)
+        }
+
         onStatusChange?(.running, "服务运行中 (port \(config.port))")
         appendServiceLog("服务启动 — port \(config.port), STT: \(config.resolvedSttProvider)")
     }
@@ -171,6 +179,7 @@ actor NativeServer {
         stopExternalCliWatcher()
         await discoveryServer.stop()
         await remindersSync.stopPeriodicSync()
+        await tickTickSync.stopPeriodicSync()
         await wsServer.stop()
         setupHttpHost.stop()
         firmwareOtaHost.stop()
@@ -376,6 +385,9 @@ actor NativeServer {
             if let appleId = item.appleId, !appleId.isEmpty {
                 try? await remindersSync.deleteReminder(appleId: appleId)
             }
+            if let ticktickId = item.ticktickId, !ticktickId.isEmpty {
+                try? await tickTickSync.deleteTask(taskId: ticktickId)
+            }
         }
         await syncTodosIfEnabled()
         let snap = await todoService.getSnapshot()
@@ -424,13 +436,64 @@ actor NativeServer {
 
     func runSyncNow() async {
         await remindersSync.sync(todoService: todoService, config: config)
+        await syncTodosWithTickTickIfEnabled()
         await broadcastTodoState()
     }
 
+    func getTickTickProjects() async -> [TickTickProjectInfo] {
+        await tickTickSync.updateConfig(config)
+        guard let projects = try? await tickTickSync.fetchProjects() else { return [] }
+        return projects
+    }
+
+    func getTickTickSyncStatus() async -> [String: Any] {
+        let status = await tickTickSync.status()
+        return [
+            "enabled": status.enabled ?? false,
+            "lastSyncAt": status.lastSyncAt as Any,
+            "syncCount": status.syncCount ?? 0,
+            "lastError": status.lastError as Any,
+            "projectId": status.projectId as Any,
+            "pollSec": status.pollSec ?? 60
+        ]
+    }
+
+    func updateTickTickSyncConfig(enabled: Bool, token: String, projectId: String, pollSec: Int) async {
+        config.tickTickSyncEnabled = enabled
+        config.tickTickAccessToken = token
+        config.tickTickProjectId = projectId
+        config.tickTickPollSec = max(15, pollSec)
+        await tickTickSync.updateConfig(config)
+        if enabled, !token.isEmpty {
+            await tickTickSync.sync(todoService: todoService)
+            await tickTickSync.startPeriodicSync(todoService: todoService)
+        } else {
+            await tickTickSync.stopPeriodicSync()
+        }
+        await broadcastTodoState()
+    }
+
+    func runTickTickSyncNow() async {
+        await tickTickSync.updateConfig(config)
+        await tickTickSync.sync(todoService: todoService)
+        await broadcastTodoState()
+    }
+
+    private func syncTodosWithTickTickIfEnabled() async {
+        guard config.tickTickSyncEnabled, !config.tickTickAccessToken.isEmpty else { return }
+        await tickTickSync.updateConfig(config)
+        await tickTickSync.sync(todoService: todoService)
+    }
+
     private func syncTodosIfEnabled() async {
-        guard config.remindersSyncEnabled else { return }
-        let override = await todoService.consumePendingReminderList()
-        await remindersSync.sync(todoService: todoService, config: config, overrideList: override)
+        if config.remindersSyncEnabled {
+            let override = await todoService.consumePendingReminderList()
+            await remindersSync.sync(todoService: todoService, config: config, overrideList: override)
+        }
+        if config.tickTickSyncEnabled, !config.tickTickAccessToken.isEmpty {
+            await tickTickSync.updateConfig(config)
+            await tickTickSync.sync(todoService: todoService)
+        }
         await broadcastTodoState()
     }
 

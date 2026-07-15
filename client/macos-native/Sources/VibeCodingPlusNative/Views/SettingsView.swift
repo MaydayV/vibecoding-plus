@@ -122,6 +122,8 @@ struct SettingsView: View {
 
             usageGuidePanel
 
+            TickTickView()
+
             providerSettings
 
             InkPanel(title: "应用行为", symbol: "gearshape") {

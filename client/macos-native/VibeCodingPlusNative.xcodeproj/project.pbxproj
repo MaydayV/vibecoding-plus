@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1B2C3D4E5F6A7B8C9D0E1F2 /* TickTickAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* TickTickAPIClient.swift */; };
+		B2C3D4E5F6A7B8C9D0E1F2A3 /* TickTickSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A4 /* TickTickSync.swift */; };
+		C3D4E5F6A7B8C9D0E1F2A3B4 /* TickTickView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F6A7B8C9D0E1F2A3B5 /* TickTickView.swift */; };
 		075B3D9C4645FCFCFACCFFF6 /* STTService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54733654901D308D57343C4F /* STTService.swift */; };
 		0F40F311DC441DB0793382AE /* EnvironmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78D69D3C5C77FDF83B0F1ADA /* EnvironmentView.swift */; };
 		0FB47BE8249A976C8E2EAFC3 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618F6E6371DCCEA1712AC53B /* LogsView.swift */; };
@@ -68,6 +71,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A1B2C3D4E5F6A7B8C9D0E1F3 /* TickTickAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickTickAPIClient.swift; sourceTree = "<group>"; };
+		B2C3D4E5F6A7B8C9D0E1F2A4 /* TickTickSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickTickSync.swift; sourceTree = "<group>"; };
+		C3D4E5F6A7B8C9D0E1F2A3B5 /* TickTickView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TickTickView.swift; sourceTree = "<group>"; };
 		01CDAB65A30CAA9F677A1C14 /* PlanOptionsExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanOptionsExtractor.swift; sourceTree = "<group>"; };
 		04FF2CF03D3F96E46F1E4604 /* LANAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LANAuthTests.swift; sourceTree = "<group>"; };
 		100F9937AAED2DAADE9E92A2 /* RemindersSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemindersSync.swift; sourceTree = "<group>"; };
@@ -151,6 +157,7 @@
 				D3E868225C66CF9846ABDE0F /* RemindersView.swift */,
 				67CF4BD743B67D7D1DB54A65 /* RootView.swift */,
 				904DBA1A4CD4F120914D53CC /* SettingsView.swift */,
+				C3D4E5F6A7B8C9D0E1F2A3B5 /* TickTickView.swift */,
 				EC4BAC645BF50EFBB3159A1E /* TodoView.swift */,
 			);
 			path = Views;
@@ -186,6 +193,8 @@
 				01CDAB65A30CAA9F677A1C14 /* PlanOptionsExtractor.swift */,
 				BCD4B647CD735411E7CAC1A5 /* QwenStreamingSTTSession.swift */,
 				100F9937AAED2DAADE9E92A2 /* RemindersSync.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1F3 /* TickTickAPIClient.swift */,
+				B2C3D4E5F6A7B8C9D0E1F2A4 /* TickTickSync.swift */,
 				54733654901D308D57343C4F /* STTService.swift */,
 				85B6FFF1217771E95FD836D7 /* TextInjector.swift */,
 				DB9B42C3AF4B1CE5223B1B42 /* TodoAssistant.swift */,
@@ -375,6 +384,9 @@
 				B746E313B9CB1ADF5B80AB78 /* ProtocolConstants.swift in Sources */,
 				A5A12816C3027C0240A5A0B4 /* QwenStreamingSTTSession.swift in Sources */,
 				B9ED150324A49DFA5B80977B /* RemindersSync.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1F2 /* TickTickAPIClient.swift in Sources */,
+				B2C3D4E5F6A7B8C9D0E1F2A3 /* TickTickSync.swift in Sources */,
+				C3D4E5F6A7B8C9D0E1F2A3B4 /* TickTickView.swift in Sources */,
 				5DF9E75A7D1B63A825E075C6 /* RemindersView.swift in Sources */,
 				D0C476AE2C27F33B60C3A95E /* RootView.swift in Sources */,
 				075B3D9C4645FCFCFACCFFF6 /* STTService.swift in Sources */,
