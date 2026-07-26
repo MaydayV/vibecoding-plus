@@ -88,6 +88,13 @@ const int kBatteryPollIntervalMs = 15000;
 const size_t kCachedTodoStateMaxBytes = 3500;
 const int64_t kTodoNvsDebounceMs = 500;
 const int kProtocolVersion = 1;
+// OTA download progress arrives once per percent; forwarding every tick would
+// mean up to 100 full e-paper redraws plus 100 WebSocket frames.
+const int kOtaProgressStepPct = 10;
+const int64_t kOtaProgressIntervalMs = 2000;
+// Speaker amp stays on for at most one I2S DMA buffer after the last sample is
+// queued; give it a small margin before powering the output back down.
+const int64_t kAudioOutputTailMarginMs = 30;
 const uint8_t kWifiIcon12x12[] = {
     0x00, 0x00,
     0x03, 0xC0,

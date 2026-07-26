@@ -137,7 +137,7 @@ bool LanMicApp::Initialize() {
     hint_text_ = "长按UP打开菜单\n长按BOOT开始语音";
     phase_ = Phase::Idle;
     network_state_ = NetworkState::Offline;
-    RefreshBatteryStatus(true);
+    RefreshBatteryStatus(/*suppress_display=*/true);
     UpdateDisplay();
     // Force a full e-paper refresh on startup to clear any residual image
     // from a previous firmware (e.g. factory test page)
@@ -200,7 +200,10 @@ LanMicApp::Page LanMicApp::PageForCurrentVoiceMode() const {
 }
 
 bool LanMicApp::StreamAudioFrame() {
-    if (ws_ == nullptr || !ws_->IsConnected()) {
+    // Hold a strong reference for the whole call: the "lan_reconnect" /
+    // "lan_fw_ota" tasks may swap or drop ws_ at any moment.
+    const std::shared_ptr<WebSocket> ws = GetWebSocket();
+    if (ws == nullptr || !ws->IsConnected()) {
         return false;
     }
 
@@ -208,7 +211,7 @@ bool LanMicApp::StreamAudioFrame() {
         return false;
     }
 
-    if (!ws_->Send(audio_frame_buffer_.data(), audio_frame_buffer_.size() * sizeof(int16_t), true)) {
+    if (!ws->Send(audio_frame_buffer_.data(), audio_frame_buffer_.size() * sizeof(int16_t), true)) {
         ESP_LOGW(kLanMicTag, "Failed to send audio frame");
         DisconnectWebSocket();
         return false;
@@ -234,14 +237,15 @@ void LanMicApp::CapturePrerollFrame() {
 }
 
 bool LanMicApp::FlushPrerollFrames() {
-    if (ws_ == nullptr || !ws_->IsConnected()) {
+    const std::shared_ptr<WebSocket> ws = GetWebSocket();
+    if (ws == nullptr || !ws->IsConnected()) {
         preroll_frames_.clear();
         return false;
     }
 
     while (!preroll_frames_.empty()) {
         auto& frame = preroll_frames_.front();
-        if (!ws_->Send(frame.data(), frame.size() * sizeof(int16_t), true)) {
+        if (!ws->Send(frame.data(), frame.size() * sizeof(int16_t), true)) {
             ESP_LOGW(kLanMicTag, "Failed to send preroll frame");
             preroll_frames_.clear();
             DisconnectWebSocket();
@@ -269,13 +273,13 @@ void LanMicApp::EnqueueServerMessage(const char* data, size_t len) {
     }
 }
 
-void LanMicApp::EnqueueNetEvent(PendingNetEvent event, const std::string& data) {
+void LanMicApp::EnqueueNetEvent(PendingNetEvent event, const std::string& data, int code) {
     if (net_event_queue_ == nullptr) {
         return;
     }
     PendingNetMessage item{};
     item.event = event;
-    item.code = 0;
+    item.code = code;
     if (!data.empty()) {
         snprintf(item.data, sizeof(item.data), "%s", data.c_str());
     }
@@ -377,6 +381,34 @@ void LanMicApp::HandleNetEvent(const PendingNetMessage& message) {
             active_page_ = Page::Summary;
             UpdateDisplay();
             break;
+        case PendingNetEvent::ConnectSearching:
+            status_text_ = "正在查找主机";
+            hint_text_ = GetDiscoveryHintText();
+            UpdateDisplay();
+            break;
+        case PendingNetEvent::ConnectFailed:
+            status_text_ = "连接失败";
+            hint_text_ = message.data;
+            UpdateDisplay();
+            break;
+        case PendingNetEvent::DiscoveryFound:
+            status_text_ = "发现主机";
+            hint_text_ = message.data;
+            UpdateDisplay();
+            break;
+        case PendingNetEvent::OtaProgress: {
+            char progress_text[sizeof(message.data) + 16];
+            snprintf(progress_text, sizeof(progress_text), "%s %d%%", message.data, message.code);
+            hint_text_ = progress_text;
+            UpdateDisplay();
+            break;
+        }
+        case PendingNetEvent::OtaFailed:
+            phase_ = Phase::Error;
+            status_text_ = "升级失败";
+            hint_text_ = message.data;
+            UpdateDisplay();
+            break;
     }
 }
 
@@ -388,11 +420,19 @@ void LanMicApp::DrainPendingEvents(int64_t now_ms) {
         free(item.data);
     }
 
+    // Apply the connect task's discovery result before its net events, so a
+    // DiscoveryFound hint renders against already-committed state. The fault
+    // is applied after, so a URI that was discovered and then failed to
+    // connect still gets invalidated.
+    CommitDiscoveryOutcome();
+
     PendingNetMessage net_item;
     while (net_event_queue_ != nullptr &&
            xQueueReceive(net_event_queue_, &net_item, 0) == pdPASS) {
         HandleNetEvent(net_item);
     }
+
+    ApplyConnectTargetFault();
 
     if (ws_connected_pending_.exchange(false, std::memory_order_acq_rel)) {
         PendingNetMessage connected{};

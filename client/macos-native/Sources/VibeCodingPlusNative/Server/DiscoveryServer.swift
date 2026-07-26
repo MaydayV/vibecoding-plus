@@ -15,6 +15,14 @@ actor DiscoveryServer {
     private var isRunning = false
     private var receiveSource: DispatchSourceRead?
 
+    /// Bumped on every `start()`/`stop()`. Captured by the read-source event
+    /// handler and re-checked at the top of `handleIncomingData`, so a call
+    /// that was queued before a `stop()` (or before a `stop()` + `start()`
+    /// restart that happens to recycle the same fd number) can recognize
+    /// it's stale and return without touching the fd. See the race note
+    /// on `stop()`.
+    private var generation: UInt64 = 0
+
     nonisolated(unsafe) var onLog: ((String) -> Void)?
 
     // MARK: - Lifecycle
@@ -26,6 +34,23 @@ actor DiscoveryServer {
 
         let fd = socket(AF_INET, SOCK_DGRAM, 0)
         guard fd >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EPERM)
+        }
+
+        // Non-blocking mode is required for correctness, not just performance:
+        // DispatchSourceRead is level-triggered, and the actual `recvfrom`
+        // happens later on the actor (event handler only hops into a Task),
+        // so a single incoming datagram can cause the source to fire more
+        // than once before the first Task drains it. With a blocking socket,
+        // every redundant Task would then block forever in `recvfrom` once
+        // the one pending packet was already consumed — permanently wedging
+        // this actor (nothing else on it, including `stop()`, can ever run
+        // again) and leaking a Swift concurrency worker thread. Making the fd
+        // non-blocking and draining in a loop below until EAGAIN turns those
+        // redundant wakeups into a harmless no-op instead of a hang.
+        let existingFlags = fcntl(fd, F_GETFL, 0)
+        guard existingFlags != -1, fcntl(fd, F_SETFL, existingFlags | O_NONBLOCK) != -1 else {
+            close(fd)
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EPERM)
         }
 
@@ -50,10 +75,12 @@ actor DiscoveryServer {
 
         socketFD = fd
         isRunning = true
+        generation += 1
+        let startGeneration = generation
 
         let source = DispatchSource.makeReadSource(fileDescriptor: fd)
         source.setEventHandler { [weak self] in
-            Task { await self?.handleIncomingData(fd: fd, config: config) }
+            Task { await self?.handleIncomingData(fd: fd, generation: startGeneration, config: config) }
         }
         source.setCancelHandler {
             close(fd)
@@ -67,6 +94,7 @@ actor DiscoveryServer {
     func stop() {
         guard isRunning else { return }
         isRunning = false
+        generation += 1
         receiveSource?.cancel()
         receiveSource = nil
         socketFD = -1
@@ -103,80 +131,149 @@ actor DiscoveryServer {
 
     // MARK: - Private
 
-    private func handleIncomingData(fd: Int32, config: ServerConfig) {
+    private func handleIncomingData(fd: Int32, generation callerGeneration: UInt64, config: ServerConfig) {
+        // Stale-call guard: `stop()` (or `stop()` followed by a `start()`
+        // restart) may have already run for this fd by the time this Task
+        // actually gets scheduled on the actor. `fd == socketFD` catches the
+        // plain-stop case (socketFD is reset to -1); `callerGeneration ==
+        // generation` also catches the rarer restart case where the OS
+        // happens to recycle the exact same fd number. Either way, bailing
+        // out here means we never call `recvfrom`/`sendto` on a fd that may
+        // already be closed (by `stop()`'s cancel handler) or reassigned to
+        // an unrelated socket — no matter how the actor happens to interleave
+        // this call relative to `stop()`.
+        guard isRunning, fd == socketFD, callerGeneration == generation else { return }
+
+        // `fd` is non-blocking (set in `start()`), so drain datagrams queued
+        // on the socket right now: the level-triggered DispatchSourceRead can
+        // otherwise fire again for data this same call already consumed,
+        // spawning a redundant Task that would find nothing left to read.
+        // Looping here until EAGAIN/EWOULDBLOCK (bounded below) means that
+        // redundant Task's `recvfrom` returns immediately instead of
+        // blocking — see the longer explanation in `start()`.
+        //
+        // The loop is capped at `maxDatagramsPerBatch` rather than running
+        // until EAGAIN unconditionally. Per accepted datagram this does a
+        // full `getifaddrs`/`freeifaddrs` interface walk (`findLocalAddress`),
+        // a JSON encode, and up to two HMAC-SHA256 signatures — real CPU work
+        // with no `await` in between, so an unbounded loop would let a UDP
+        // broadcast storm (or a deliberate flood) occupy this actor
+        // indefinitely, wedging it exactly like the original blocking-socket
+        // bug did, just via packet volume instead of a blocked syscall —
+        // and while wedged, `stop()` can never even be scheduled. 32 is
+        // comfortably above any realistic LAN discovery burst (a handful of
+        // ESP32 devices at most send `discover_host` at once) while keeping
+        // worst-case per-invocation occupancy small. If more than 32
+        // datagrams are queued, `DispatchSourceRead` simply fires again once
+        // this call returns and a fresh Task drains the next batch — so
+        // returning at the cap (instead of forcing this call to reach EAGAIN
+        // no matter what) is what lets `stop()` and other actor-isolated work
+        // interleave between batches under sustained volume.
+        let maxDatagramsPerBatch = 32
         var buffer = [UInt8](repeating: 0, count: 2048)
-        var senderAddr = sockaddr_in()
-        var senderLen = socklen_t(MemoryLayout<sockaddr_in>.size)
 
-        let bytesRead = withUnsafeMutablePointer(to: &senderAddr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                recvfrom(fd, &buffer, buffer.count, 0, $0, &senderLen)
-            }
-        }
-        guard bytesRead > 0 else { return }
+        // `findLocalAddress` walks every network interface via `getifaddrs`;
+        // the interface list won't meaningfully change over the lifetime of
+        // one batch, so memoize it per remote IP for this call only (cache is
+        // local to this invocation and discarded on return — no persisted
+        // state, no change to what any individual packet gets as a reply).
+        var localAddressCache: [String: String?] = [:]
 
-        let data = Data(buffer.prefix(bytesRead))
-        guard let request = parseDiscoveryRequest(data) else { return }
+        for _ in 0..<maxDatagramsPerBatch {
+            var senderAddr = sockaddr_in()
+            var senderLen = socklen_t(MemoryLayout<sockaddr_in>.size)
 
-        // Optional: filter by expected host id
-        let expectedHostId = (request["expectedHostId"] as? String) ?? ""
-        if !expectedHostId.isEmpty && expectedHostId != config.discoveryHostId {
-            return
-        }
-
-        let remoteIP = String(cString: inet_ntoa(senderAddr.sin_addr))
-        guard let replyAddress = findLocalAddress(forRemoteIP: remoteIP) else { return }
-
-        let nonce = (request["nonce"] as? String) ?? ""
-        let deviceId = (request["deviceId"] as? String) ?? "unknown"
-
-        let replyHostName = "\(hostname) · \(replyAddress)"
-        let pairUrl = "http://\(replyAddress):\(config.setupPort)/pair"
-        var body: [String: Any] = [
-            "type": LANServerMessage.discover_reply,
-            "service": serviceTag,
-            "hostId": config.discoveryHostId,
-            "hostName": replyHostName,
-            "wsUrl": "ws://\(replyAddress):\(config.port)",
-            "wsPort": config.port,
-            "pairUrl": pairUrl,
-            "nonce": nonce,
-            "deviceId": deviceId,
-        ]
-        if !config.pairingCode.isEmpty {
-            body["pairCode"] = config.pairingCode
-        }
-        if !config.lanSharedSecret.isEmpty, !nonce.isEmpty, !config.pairingCode.isEmpty {
-            body["pairToken"] = LANAuth.signPairToken(
-                secret: config.lanSharedSecret,
-                hostId: config.discoveryHostId,
-                pairCode: config.pairingCode,
-                nonce: nonce
-            )
-        }
-
-        if !config.lanSharedSecret.isEmpty && !nonce.isEmpty {
-            body["authSig"] = LANAuth.signDiscoveryReply(
-                secret: config.lanSharedSecret,
-                hostId: config.discoveryHostId,
-                hostName: replyHostName,
-                wsUrl: "ws://\(replyAddress):\(config.port)",
-                nonce: nonce
-            )
-        }
-
-        guard let replyData = try? JSONSerialization.data(withJSONObject: body),
-              let replyString = String(data: replyData, encoding: .utf8) else { return }
-
-        replyString.withCString { cstr in
-            let len = strlen(cstr)
-            withUnsafePointer(to: &senderAddr) { ptr in
+            let bytesRead = withUnsafeMutablePointer(to: &senderAddr) { ptr in
                 ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    _ = sendto(fd, cstr, len, 0, $0, senderLen)
+                    recvfrom(fd, &buffer, buffer.count, 0, $0, &senderLen)
                 }
             }
+
+            if bytesRead < 0 {
+                if errno == EINTR { continue } // interrupted syscall, retry
+                // EAGAIN/EWOULDBLOCK: nothing left queued right now. Any
+                // other error (e.g. EBADF if the fd was concurrently torn
+                // down) also means there's nothing useful left to do here.
+                return
+            }
+            guard bytesRead > 0 else { continue } // valid zero-length datagram; keep draining
+
+            let data = Data(buffer.prefix(bytesRead))
+            guard let request = parseDiscoveryRequest(data) else { continue }
+
+            // Optional: filter by expected host id
+            let expectedHostId = (request["expectedHostId"] as? String) ?? ""
+            if !expectedHostId.isEmpty && expectedHostId != config.discoveryHostId {
+                continue
+            }
+
+            let remoteIP = String(cString: inet_ntoa(senderAddr.sin_addr))
+            let replyAddressLookup: String?
+            if let cached = localAddressCache[remoteIP] {
+                replyAddressLookup = cached
+            } else {
+                let resolved = findLocalAddress(forRemoteIP: remoteIP)
+                localAddressCache.updateValue(resolved, forKey: remoteIP)
+                replyAddressLookup = resolved
+            }
+            guard let replyAddress = replyAddressLookup else { continue }
+
+            let nonce = (request["nonce"] as? String) ?? ""
+            let deviceId = (request["deviceId"] as? String) ?? "unknown"
+
+            let replyHostName = "\(hostname) · \(replyAddress)"
+            let pairUrl = "http://\(replyAddress):\(config.setupPort)/pair"
+            var body: [String: Any] = [
+                "type": LANServerMessage.discover_reply,
+                "service": serviceTag,
+                "hostId": config.discoveryHostId,
+                "hostName": replyHostName,
+                "wsUrl": "ws://\(replyAddress):\(config.port)",
+                "wsPort": config.port,
+                "pairUrl": pairUrl,
+                "nonce": nonce,
+                "deviceId": deviceId,
+            ]
+            if !config.pairingCode.isEmpty {
+                body["pairCode"] = config.pairingCode
+            }
+            if !config.lanSharedSecret.isEmpty, !nonce.isEmpty, !config.pairingCode.isEmpty {
+                body["pairToken"] = LANAuth.signPairToken(
+                    secret: config.lanSharedSecret,
+                    hostId: config.discoveryHostId,
+                    pairCode: config.pairingCode,
+                    nonce: nonce
+                )
+            }
+
+            if !config.lanSharedSecret.isEmpty && !nonce.isEmpty {
+                body["authSig"] = LANAuth.signDiscoveryReply(
+                    secret: config.lanSharedSecret,
+                    hostId: config.discoveryHostId,
+                    hostName: replyHostName,
+                    wsUrl: "ws://\(replyAddress):\(config.port)",
+                    nonce: nonce
+                )
+            }
+
+            guard let replyData = try? JSONSerialization.data(withJSONObject: body),
+                  let replyString = String(data: replyData, encoding: .utf8) else { continue }
+
+            replyString.withCString { cstr in
+                let len = strlen(cstr)
+                withUnsafePointer(to: &senderAddr) { ptr in
+                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        _ = sendto(fd, cstr, len, 0, $0, senderLen)
+                    }
+                }
+            }
+            onLog?("发现回复: remote=\(remoteIP), deviceId=\(deviceId)")
         }
-        onLog?("发现回复: remote=\(remoteIP), deviceId=\(deviceId)")
+        // Cap reached with the socket possibly still non-empty: fall out and
+        // return here (rather than looping back to check for EAGAIN) so this
+        // actor turn ends. If datagrams remain queued, the level-triggered
+        // source fires again and a fresh Task picks up the next batch — see
+        // the cap comment above.
     }
 
     private func parseDiscoveryRequest(_ data: Data) -> [String: Any]? {

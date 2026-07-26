@@ -65,6 +65,10 @@ enum WSFrameParseOutcome {
 
 final class WSFrameParser {
     private var buffer: [UInt8] = []
+    /// Index of the first not-yet-consumed byte in `buffer`. Frames are
+    /// "removed" by advancing this cursor instead of shifting the array on
+    /// every single frame — see `compact()`.
+    private var readIndex: Int = 0
     private let maxFramePayload: Int
 
     init(maxFramePayload: Int = 4 * 1024 * 1024) {
@@ -74,25 +78,43 @@ final class WSFrameParser {
     func feed(_ data: Data) -> (messages: [WSFrameMessage], protocolError: String?) {
         buffer.append(contentsOf: data)
         var messages: [WSFrameMessage] = []
-        while !buffer.isEmpty {
+        while readIndex < buffer.count {
             switch parseOne() {
             case .needMoreData:
+                compact()
                 return (messages, nil)
             case .message(let msg):
                 messages.append(msg)
             case .protocolError(let reason):
                 buffer.removeAll()
+                readIndex = 0
                 return (messages, reason)
             }
         }
+        compact()
         return (messages, nil)
     }
 
-    private func parseOne() -> WSFrameParseOutcome {
-        guard buffer.count >= 2 else { return .needMoreData }
+    /// Drops already-consumed bytes from the front of `buffer` in a single
+    /// shift. Called once per `feed()` call (i.e. once per socket read)
+    /// rather than once per frame, so draining N buffered frames costs
+    /// O(N) total instead of O(N^2) from repeated `removeFirst`.
+    private func compact() {
+        guard readIndex > 0 else { return }
+        if readIndex >= buffer.count {
+            buffer.removeAll(keepingCapacity: true)
+        } else {
+            buffer.removeFirst(readIndex)
+        }
+        readIndex = 0
+    }
 
-        let byte0 = buffer[0]
-        let byte1 = buffer[1]
+    private func parseOne() -> WSFrameParseOutcome {
+        let available = buffer.count - readIndex
+        guard available >= 2 else { return .needMoreData }
+
+        let byte0 = buffer[readIndex]
+        let byte1 = buffer[readIndex + 1]
         let opcode = byte0 & 0x0F
         let fin = (byte0 & 0x80) != 0
         let masked = (byte1 & 0x80) != 0
@@ -100,13 +122,13 @@ final class WSFrameParser {
         var offset = 2
 
         if payloadLen == 126 {
-            guard buffer.count >= offset + 2 else { return .needMoreData }
-            payloadLen = Int(UInt16(buffer[offset]) << 8 | UInt16(buffer[offset + 1]))
+            guard available >= offset + 2 else { return .needMoreData }
+            payloadLen = Int(UInt16(buffer[readIndex + offset]) << 8 | UInt16(buffer[readIndex + offset + 1]))
             offset += 2
         } else if payloadLen == 127 {
-            guard buffer.count >= offset + 8 else { return .needMoreData }
+            guard available >= offset + 8 else { return .needMoreData }
             var val: UInt64 = 0
-            for i in 0..<8 { val = (val << 8) | UInt64(buffer[offset + i]) }
+            for i in 0..<8 { val = (val << 8) | UInt64(buffer[readIndex + offset + i]) }
             guard val <= UInt64(maxFramePayload) else { return .protocolError("frame_too_large") }
             payloadLen = Int(val)
             offset += 8
@@ -120,15 +142,16 @@ final class WSFrameParser {
 
         var maskKey: [UInt8]?
         if masked {
-            guard buffer.count >= offset + 4 else { return .needMoreData }
-            maskKey = Array(buffer[offset..<offset + 4])
+            guard available >= offset + 4 else { return .needMoreData }
+            maskKey = Array(buffer[(readIndex + offset)..<(readIndex + offset + 4)])
             offset += 4
         }
 
-        guard buffer.count >= offset + payloadLen else { return .needMoreData }
+        guard available >= offset + payloadLen else { return .needMoreData }
 
-        var payloadBytes = Array(buffer[offset..<offset + payloadLen])
-        buffer.removeFirst(offset + payloadLen)
+        let payloadStart = readIndex + offset
+        var payloadBytes = Array(buffer[payloadStart..<payloadStart + payloadLen])
+        readIndex = payloadStart + payloadLen
 
         if let maskKey {
             for i in payloadBytes.indices {

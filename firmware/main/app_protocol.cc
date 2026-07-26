@@ -61,10 +61,13 @@ extern "C" RtcPcf8563* __attribute__((weak)) ZectrixGetRtc();
 #endif
 
 bool LanMicApp::SendJson(const char* json) {
-    if (ws_ == nullptr || !ws_->IsConnected()) {
+    // SendJson() is reachable from the main loop and from the "lan_fw_ota"
+    // task; take a strong reference so the socket cannot be freed underneath us.
+    const std::shared_ptr<WebSocket> ws = GetWebSocket();
+    if (ws == nullptr || !ws->IsConnected()) {
         return false;
     }
-    if (!ws_->Send(json)) {
+    if (!ws->Send(json)) {
         ESP_LOGW(kLanMicTag, "Failed to send json: %s", json);
         DisconnectWebSocket();
         return false;
@@ -313,6 +316,8 @@ void LanMicApp::HandleFirmwareOffer(cJSON* root) {
     status_text_ = "固件升级";
     hint_text_ = "准备下载...";
     UpdateDisplay();
+    last_ota_progress_ms_ = 0;
+    last_ota_progress_pct_ = -1;
 
     FirmwareOtaOffer offer;
     offer.url = url;
@@ -324,20 +329,34 @@ void LanMicApp::HandleFirmwareOffer(cJSON* root) {
     }
     offer.size = size;
 
+    // NOTE: this callback runs on the "lan_fw_ota" task. It must not write
+    // phase_/status_text_/hint_text_ nor drive the e-paper directly — the main
+    // loop owns those and applies the queued events in DrainPendingEvents().
     StartFirmwareOta(offer, [this, offer](const char* phase, int pct, const char* error) {
+        const bool has_error = error != nullptr && error[0] != '\0';
         if (phase != nullptr && strcmp(phase, "result") == 0) {
-            SendFirmwareResult(error == nullptr, offer.version.c_str(), error != nullptr ? error : "ok");
+            SendFirmwareResult(!has_error, offer.version.c_str(), has_error ? error : "ok");
             return;
         }
+
+        // Throttle the per-percent download ticks: every kOtaProgressStepPct or
+        // kOtaProgressIntervalMs, whichever comes first. Errors and non-download
+        // phases (verify/flash/reboot) always pass through.
+        const bool is_download = phase != nullptr && strcmp(phase, "download") == 0;
+        const int64_t now_ms = esp_timer_get_time() / 1000;
+        if (is_download && !has_error && pct > 0 && pct < 100 &&
+            (pct - last_ota_progress_pct_) < kOtaProgressStepPct &&
+            (now_ms - last_ota_progress_ms_) < kOtaProgressIntervalMs) {
+            return;
+        }
+        last_ota_progress_pct_ = pct;
+        last_ota_progress_ms_ = now_ms;
+
         SendFirmwareProgress(phase, pct, error);
-        if (error != nullptr && error[0] != '\0') {
-            phase_ = Phase::Error;
-            status_text_ = "升级失败";
-            hint_text_ = error;
-            UpdateDisplay();
+        if (has_error) {
+            EnqueueNetEvent(PendingNetEvent::OtaFailed, error);
         } else if (phase != nullptr) {
-            hint_text_ = phase;
-            UpdateDisplay();
+            EnqueueNetEvent(PendingNetEvent::OtaProgress, phase, pct);
         }
     });
 }

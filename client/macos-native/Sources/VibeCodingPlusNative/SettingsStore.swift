@@ -41,7 +41,7 @@ struct SettingsStore {
         config.claudeDangerouslySkipPermissions = values["CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS"] == "1"
         config.claudeMaxTurns = Int(values["CLAUDE_MAX_TURNS"] ?? "") ?? 10
         config.mockTranscript = values["MOCK_TRANSCRIPT"] ?? ""
-        config.port = Int(values["PORT"] ?? "") ?? 8765
+        config.port = Int(values["LAN_VOICE_PORT"] ?? values["PORT"] ?? "") ?? 8765
         config.discoveryHostId = values["LAN_DISCOVERY_HOST_ID"] ?? "VibeServer"
         config.discoveryPort = Int(values["LAN_DISCOVERY_PORT"] ?? "") ?? 8766
         config.remindersSyncEnabled = values["REMINDERS_SYNC_ENABLED"] == "1" || values["REMINDERS_SYNC_ENABLED"]?.lowercased() == "true"
@@ -107,6 +107,8 @@ struct SettingsStore {
         values["MOCK_TRANSCRIPT"] = nilIfEmpty(config.mockTranscript)
         values["CODEX_SKIP_GIT_REPO_CHECK"] = config.codexSkipGitRepoCheck ? "1" : nil
         values["CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS"] = config.claudeDangerouslySkipPermissions ? "1" : nil
+        values["LAN_VOICE_PORT"] = config.port != 8765 ? String(config.port) : nil
+        values["PORT"] = nil // migrate legacy key so it can't shadow LAN_VOICE_PORT on next load
         values["LAN_DISCOVERY_HOST_ID"] = nilIfEmpty(config.discoveryHostId)
         values["LAN_DISCOVERY_PORT"] = config.discoveryPort != 8766 ? String(config.discoveryPort) : nil
         values["REMINDERS_SYNC_ENABLED"] = config.remindersSyncEnabled ? "1" : nil

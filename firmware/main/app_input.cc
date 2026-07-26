@@ -69,7 +69,9 @@ void LanMicApp::ConfigureButtons() {
     ESP_ERROR_CHECK(gpio_config(&cfg));
 }
 
-void LanMicApp::RefreshBatteryStatus(bool force_update) {
+// suppress_display == true keeps the display untouched even when the reading
+// changed; used by callers that redraw immediately afterwards anyway.
+void LanMicApp::RefreshBatteryStatus(bool suppress_display) {
     int level = 0;
     bool charging = false;
     bool discharging = false;
@@ -83,7 +85,7 @@ void LanMicApp::RefreshBatteryStatus(bool force_update) {
     battery_level_ = level;
     battery_charging_ = charging;
     battery_discharging_ = discharging;
-    if (!force_update && changed) {
+    if (!suppress_display && changed) {
         UpdateDisplay();
     }
 }
@@ -890,6 +892,7 @@ void LanMicApp::Run() {
     while (true) {
         const int64_t now_ms = esp_timer_get_time() / 1000;
         DrainPendingEvents(now_ms);
+        ServiceAudioOutput(now_ms);
         FlushCachedTodoStateIfNeeded(now_ms);
         const bool allow_up_mode_double =
             !todo_menu_open_ &&
@@ -1184,11 +1187,16 @@ void LanMicApp::Run() {
             UpdateDisplay();
         }
 
-        if (IsServerConnected()) {
+        // One strong reference for the whole heartbeat block: the background
+        // connect / OTA tasks may swap or drop the socket at any point, so a
+        // bare `ws_ != nullptr` check followed by a dereference would be a
+        // use-after-free window.
+        const std::shared_ptr<WebSocket> heartbeat_ws = GetWebSocket();
+        if (heartbeat_ws != nullptr && heartbeat_ws->IsConnected()) {
             if (awaiting_pong_since_ms == 0 && (now_ms - last_ws_ping_ms) >= kClientPingIntervalMs) {
-                const int64_t pong_baseline_ms = ws_->GetLastPongMs();
+                const int64_t pong_baseline_ms = heartbeat_ws->GetLastPongMs();
                 last_ws_ping_ms = now_ms;
-                if (!ws_->Ping()) {
+                if (!heartbeat_ws->Ping()) {
                     ESP_LOGW(kLanMicTag, "WebSocket ping send failed; reconnecting");
                     const bool should_stay_offline_todo =
                         active_page_ == Page::Todo || offline_todo_mode_;
@@ -1218,7 +1226,7 @@ void LanMicApp::Run() {
                 awaiting_pong_since_ms = now_ms;
                 awaiting_pong_baseline_ms = pong_baseline_ms;
             }
-            const int64_t last_pong_ms = ws_->GetLastPongMs();
+            const int64_t last_pong_ms = heartbeat_ws->GetLastPongMs();
             if (awaiting_pong_since_ms > 0 && last_pong_ms > awaiting_pong_baseline_ms) {
                 awaiting_pong_since_ms = 0;
                 awaiting_pong_baseline_ms = 0;
@@ -1480,7 +1488,29 @@ void LanMicApp::Run() {
 
         if (pressed) {
             if (phase_ == Phase::Recording) {
-                StreamAudioFrame();
+                // On the happy path codec_->InputData() blocks for one ~20 ms
+                // frame, which paces this branch. When streaming fails the call
+                // returns immediately (socket gone, or Send() failed and tore
+                // the socket down itself), and since ws_.reset() means
+                // OnDisconnected() may never fire, ws_disconnected_pending_
+                // would stay clear and phase_ would stay Recording — leaving
+                // this branch spinning with no vTaskDelay for as long as BOOT is
+                // held. So leave the recording phase as soon as a frame fails.
+                if (!StreamAudioFrame()) {
+                    ESP_LOGW(kLanMicTag, "Audio streaming failed; aborting recording");
+                    phase_ = Phase::Error;
+                    status_text_ = "录音中断";
+                    hint_text_ = "连接已断开，松开 BOOT";
+                    preroll_frames_.clear();
+                    // Neutralise the in-flight BOOT gesture so the release below
+                    // is not mistaken for a short tap / todo toggle.
+                    boot_pressed_since_ms = 0;
+                    todo_hold_started = false;
+                    todo_boot_tap_.Cancel();
+                    injector_boot_tap_.Cancel();
+                    UpdateDisplay();
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                }
                 continue;
             }
 

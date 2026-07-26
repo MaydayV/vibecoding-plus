@@ -85,9 +85,10 @@ actor NativeServer {
 
     // MARK: State
 
-    private var usedNonces = Set<String>()
     private var recentHelloNonces: [String: Date] = [:]
     private var clientStates: [UUID: ClientState] = [:]
+    /// 心跳计数：连接还挂在 wsServer 上、但已从 clientStates 移除（如认证失败）时使用。
+    private var orphanMissedPings: [UUID: Int] = [:]
     private var cliView = CLIViewState()
     private var serviceLogLines: [String] = []
     private let maxServiceLogLines = 200
@@ -102,7 +103,7 @@ actor NativeServer {
     private var firmwareOtaProgress: [String: (phase: String, pct: Int)] = [:]
     private var streamingSttSessions: [UUID: QwenStreamingSTTSession] = [:]
     private var cliPromptQueue: [(text: String, connId: UUID, injectionMode: String?)] = []
-    private var firmwareCheckContinuations: [String: CheckedContinuation<Bool, Never>] = [:]
+    private var firmwareCheckContinuations: [String: (token: UUID, continuation: CheckedContinuation<Bool, Never>)] = [:]
 
     // MARK: Callbacks to UI layer (nonisolated for external wiring)
 
@@ -134,29 +135,37 @@ actor NativeServer {
         config.pairingCode = pairingCode
         refreshSetupPageSnapshot()
 
-        todoService = await .create(storagePath: config.todoListPath)
-        await todoService.setOnChange { [weak self] in
-            Task { await self?.broadcastTodoState() }
-        }
-        try await wsServer.start(port: UInt16(config.port))
-        wireWebSocketCallbacks()
-        startSetupHttpHost()
+        do {
+            todoService = await .create(storagePath: config.todoListPath)
+            await todoService.setOnChange { [weak self] in
+                Task { await self?.broadcastTodoState() }
+            }
+            try await wsServer.start(port: UInt16(config.port))
+            wireWebSocketCallbacks()
+            startSetupHttpHost()
 
-        // Wire discovery log
-        discoveryServer.onLog = { [weak self] msg in
-            Task { await self?.appendServiceLog(msg) }
-        }
+            // Wire discovery log
+            discoveryServer.onLog = { [weak self] msg in
+                Task { await self?.appendServiceLog(msg) }
+            }
 
-        startKeepalive()
-        startExternalCliWatcher()
+            startKeepalive()
+            startExternalCliWatcher()
 
-        // Start UDP discovery server. Treat failure as fatal: the e-paper
-        // device relies on this listener to replace stale .local/cache targets.
-        try await discoveryServer.start(config: config)
+            // Start UDP discovery server. Treat failure as fatal: the e-paper
+            // device relies on this listener to replace stale .local/cache targets.
+            try await discoveryServer.start(config: config)
 
-        // Start reminders sync if enabled
-        if config.remindersSyncEnabled {
-            await remindersSync.startPeriodicSync(todoService: todoService, config: config)
+            // Start reminders sync if enabled
+            if config.remindersSyncEnabled {
+                await remindersSync.startPeriodicSync(todoService: todoService, config: config)
+            }
+        } catch {
+            // 任何一步失败都要回滚：否则 WS 监听 / 配对页 HTTP / 定时任务会留在后台，
+            // 调用方重新启动时直接 EADDRINUSE。
+            await teardownServices()
+            appendServiceLog("服务启动失败，已回滚: \(error.localizedDescription)")
+            throw error
         }
 
         onStatusChange?(.running, "服务运行中 (port \(config.port))")
@@ -165,6 +174,15 @@ actor NativeServer {
 
     func stop() async {
         guard isRunning else { return }
+        await teardownServices()
+
+        onStatusChange?(.stopped, "服务已停止")
+        appendServiceLog("服务停止")
+    }
+
+    /// 停止所有已启动的子服务并复位状态。stop() 与 start() 的失败回滚共用，
+    /// 保证端口 / 定时任务 / 流式会话不会残留。对未启动的子服务调用是安全的。
+    private func teardownServices() async {
         isRunning = false
 
         stopKeepalive()
@@ -174,12 +192,18 @@ actor NativeServer {
         await wsServer.stop()
         setupHttpHost.stop()
         firmwareOtaHost.stop()
+        cancelAllStreamingSttSessions()
         clientStates.removeAll()
-        usedNonces.removeAll()
+        orphanMissedPings.removeAll()
         recentHelloNonces.removeAll()
+    }
 
-        onStatusChange?(.stopped, "服务已停止")
-        appendServiceLog("服务停止")
+    /// 取消并释放所有进行中的流式 STT 会话。QwenStreamingSTTSession 内部持有
+    /// URLSession，不 invalidate 会一直自持（连同 WebSocket task）。
+    private func cancelAllStreamingSttSessions() {
+        guard !streamingSttSessions.isEmpty else { return }
+        for session in streamingSttSessions.values { session.cancel() }
+        streamingSttSessions.removeAll()
     }
 
     func restart(with newConfig: ServerConfig) async throws {
@@ -225,11 +249,18 @@ actor NativeServer {
             throw URLError(.userAuthenticationRequired)
         }
         let state = clientStates[connId] ?? ClientState()
+        let deviceId = state.deviceId
+        // 同一设备的固件检查不允许并发：字典里的旧 continuation 一旦被覆盖就再也
+        // 无法 resume（对应的 task 永久挂起）。这里提前拒绝，也避免重启 OTA HTTP。
+        guard firmwareCheckContinuations[deviceId] == nil else {
+            appendServiceLog("固件检查进行中，忽略重复请求: \(deviceId)")
+            throw NativeServerError.firmwareCheckInProgress
+        }
         let remoteIP = conn.remoteAddress.components(separatedBy: ":").first ?? "127.0.0.1"
         let localIP = await discoveryServer.localAddress(forRemoteIP: remoteIP) ?? "127.0.0.1"
         let (sha256, size) = try firmwareOtaHost.start(binURL: binURL)
         let version = resolveFirmwareVersion(binURL: binURL)
-        firmwareOtaProgress[state.deviceId] = ("检查版本", 0)
+        firmwareOtaProgress[deviceId] = ("检查版本", 0)
 
         var checkPayload: [String: Any] = [
             "type": LANServerMessage.firmware_check,
@@ -241,14 +272,20 @@ actor NativeServer {
         }
         sendJson(to: conn, checkPayload)
 
-        let deviceId = state.deviceId
         let needUpgrade = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            firmwareCheckContinuations[deviceId] = cont
+            let token = UUID()
+            if let stale = firmwareCheckContinuations.updateValue((token: token, continuation: cont), forKey: deviceId) {
+                // 上面的 guard 已挡住绝大多数情况；万一并发穿透，先放行旧的，
+                // 绝不能让 continuation 被静默丢弃。
+                stale.continuation.resume(returning: true)
+            }
             Task {
                 try? await Task.sleep(for: .seconds(3))
-                if let pending = firmwareCheckContinuations.removeValue(forKey: deviceId) {
-                    pending.resume(returning: true)
-                }
+                // 只超时自己那一次检查，不要误伤同设备的后续检查。
+                guard let pending = firmwareCheckContinuations[deviceId],
+                      pending.token == token else { return }
+                firmwareCheckContinuations.removeValue(forKey: deviceId)
+                pending.continuation.resume(returning: true)
             }
         }
 
@@ -563,8 +600,8 @@ actor NativeServer {
         case LANDeviceMessage.firmware_check_result:
             guard ensureAuthenticated(connId, conn: conn) else { return }
             let needUpgrade = (message["needUpgrade"] as? Bool) ?? true
-            if let cont = firmwareCheckContinuations.removeValue(forKey: deviceId) {
-                cont.resume(returning: needUpgrade)
+            if let pending = firmwareCheckContinuations.removeValue(forKey: deviceId) {
+                pending.continuation.resume(returning: needUpgrade)
             }
 
         default:
@@ -652,6 +689,13 @@ actor NativeServer {
     private func handlePttStart(_ message: [String: Any], connId: UUID) async {
         var state = clientStates[connId] ?? ClientState()
 
+        // 设备连发两次 ptt_start（中间没有 ptt_stop）时，上一段的流式会话必须先
+        // 取消，否则它的 URLSession / WebSocket task 会被直接丢弃且永不释放。
+        if let stale = streamingSttSessions.removeValue(forKey: connId) {
+            stale.cancel()
+            appendServiceLog("流式 STT: 丢弃上一段未结束的会话")
+        }
+
         let source = (message["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         appendServiceLog("PTT开始: \(state.deviceId), source=\(source.isEmpty ? "firmware" : source)")
         if source == "desktop_mic" {
@@ -689,6 +733,9 @@ actor NativeServer {
         var state = clientStates[connId] ?? ClientState()
 
         if let session = streamingSttSessions.removeValue(forKey: connId) {
+            // 成功路径同样要 cancel：session 内部的 URLSession 不 invalidate
+            // 就会一直自持，每次 PTT 泄漏一个 URLSession + WebSocket task。
+            defer { session.cancel() }
             state.segmentActive = false
             clientStates[connId] = state
             sendJson(to: conn, ["type": LANServerMessage.status, "status": "transcribing"])
@@ -701,7 +748,6 @@ actor NativeServer {
                     transcript = try await session.finish()
                 } catch {
                     appendServiceLog("流式 STT 错误: \(error.localizedDescription)")
-                    session.cancel()
                     sendJson(to: conn, ["type": LANServerMessage.status, "status": "transcript_empty"])
                     return
                 }
@@ -1702,15 +1748,20 @@ actor NativeServer {
     private func runKeepalive() async {
         var toRemove: [UUID] = []
         for (connId, conn) in await wsServer.allConnections().map({ ($0.id, $0) }) {
-            var state = clientStates[connId]
-            let missed = (state?.missedPings ?? 0) + 1
+            // clientStates 里已经没有的连接（例如认证失败后被移除、但仍挂在
+            // wsServer 上）必须单独计数，否则每轮都从 0 重新算，永远不会超时。
+            let missed = (clientStates[connId]?.missedPings ?? orphanMissedPings[connId] ?? 0) + 1
             if missed >= keepaliveMissLimit {
                 toRemove.append(connId)
-                appendServiceLog("心跳超时: \(state?.deviceId ?? "unknown")")
+                appendServiceLog("心跳超时: \(clientStates[connId]?.deviceId ?? "unknown")")
                 continue
             }
-            state?.missedPings = missed
-            if let state { clientStates[connId] = state }
+            if var state = clientStates[connId] {
+                state.missedPings = missed
+                clientStates[connId] = state
+            } else {
+                orphanMissedPings[connId] = missed
+            }
             conn.sendPing()
         }
         for connId in toRemove {
@@ -1718,6 +1769,7 @@ actor NativeServer {
                 conn.close()
             }
             clientStates.removeValue(forKey: connId)
+            orphanMissedPings.removeValue(forKey: connId)
         }
     }
 
@@ -1758,6 +1810,10 @@ actor NativeServer {
     // Called externally by the WebSocket layer when a connection drops
     func handleDisconnect(_ connId: UUID) {
         let state = clientStates.removeValue(forKey: connId)
+        orphanMissedPings.removeValue(forKey: connId)
+        if let session = streamingSttSessions.removeValue(forKey: connId) {
+            session.cancel()
+        }
         let deviceId = state?.deviceId ?? "unknown"
         let boardType = state?.boardType ?? "unknown"
         onDeviceEvent?("disconnected", deviceId, boardType)
@@ -1789,6 +1845,7 @@ actor NativeServer {
     }
 
     private func markConnectionAlive(_ connId: UUID) {
+        orphanMissedPings.removeValue(forKey: connId)
         guard var state = clientStates[connId] else { return }
         state.missedPings = 0
         clientStates[connId] = state
@@ -1990,12 +2047,14 @@ enum NativeServerError: LocalizedError {
     case cliBusy
     case notRunning
     case firmwareUpToDate
+    case firmwareCheckInProgress
 
     var errorDescription: String? {
         switch self {
         case .cliBusy: "CLI session is busy"
         case .notRunning: "Server is not running"
         case .firmwareUpToDate: "Device firmware is already up to date"
+        case .firmwareCheckInProgress: "固件版本检查进行中，请稍候重试"
         }
     }
 }

@@ -140,15 +140,21 @@ enum TextInjector {
         NSPasteboard.general.setString(text, forType: .string)
         Thread.sleep(forTimeInterval: 0.06)
 
+        // 无论走 AppleScript 主路径还是 CGEvent 兜底路径、成功还是失败，
+        // 剪贴板里都必须保持待注入文本直到粘贴动作真正完成，最后统一用
+        // defer 恢复旧内容——避免兜底路径把旧剪贴板内容误粘贴出去。
+        defer {
+            restoreClipboard(previousClipboard)
+        }
+
         do {
             let pressEnter = mode == .typeAndEnter
             try runAppleScript(pasteScript(pressEnter: pressEnter))
             Thread.sleep(forTimeInterval: 0.25)
-            restoreClipboard(previousClipboard)
         } catch {
-            restoreClipboard(previousClipboard)
             InjectLogger.log("AppleScript paste failed, trying CGEvent fallback")
             try injectViaCGEvent(mode: mode)
+            Thread.sleep(forTimeInterval: 0.25)
         }
     }
 
@@ -194,8 +200,10 @@ enum TextInjector {
             keyDown.flags = flags
             keyUp.flags = flags
         }
-        keyDown.post(tap: .cgSessionEventTap)
-        keyUp.post(tap: .cgSessionEventTap)
+        // 只投递一次：.cgSessionEventTap 和 .cghidEventTap 都是真实的事件注入点，
+        // 两个都投会导致按键被处理两次（双份 Cmd+V / 双回车）。这里选
+        // .cghidEventTap，因为它位于事件流最上游、等价于硬件输入，
+        // 作为 AppleScript 失败后的兜底路径，对大多数 App 的兼容性最好。
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
     }

@@ -71,7 +71,14 @@ final class CodexSessionManager: CLISession {
         notifyStatus("Running Codex...")
 
         let executable = findExecutable(config.codexCommand)
-        var arguments = ["-C", config.codexCwd]
+        let cwd = config.codexCwd.isEmpty
+            ? FileManager.default.currentDirectoryPath
+            : config.codexCwd
+
+        var arguments: [String] = []
+        if !cwd.isEmpty {
+            arguments += ["-C", cwd]
+        }
 
         if !threadId.isEmpty {
             arguments += ["exec", "resume", threadId, "--json", trimmed]
@@ -86,7 +93,7 @@ final class CodexSessionManager: CLISession {
         let proc = try spawnProcess(
             executable: executable,
             arguments: arguments,
-            cwd: config.codexCwd,
+            cwd: cwd,
             timeoutSec: config.cliTimeoutSec
         )
         self.process = proc
@@ -170,6 +177,7 @@ final class CodexSessionManager: CLISession {
     }
 
     func cleanup() {
+        clearStderrHandler()
         isRunning = false
         timeoutTimer?.cancel()
         timeoutTimer = nil
@@ -395,6 +403,7 @@ final class ClaudeSessionManager: CLISession {
     }
 
     func cleanup() {
+        clearStderrHandler()
         isRunning = false
         timeoutTimer?.cancel()
         timeoutTimer = nil
@@ -484,48 +493,50 @@ private extension CLISession where Self: AnyObject {
         onEvent: @escaping ([String: Any]) -> Void,
         fallback: @escaping (String) -> Void
     ) {
-        guard let handle = proc.standardOutput as? FileHandle else { return }
+        // `proc.standardOutput` was assigned a `Pipe`, so it always reads back as a
+        // `Pipe`, never a `FileHandle` — fetch the real read handle from the pipe we
+        // stashed via objc_setAssociatedObject in spawnProcess.
+        guard let pipe = objc_getAssociatedObject(proc, "stdoutPipe") as? Pipe else { return }
+        let handle = pipe.fileHandleForReading
+
+        func handleLine(_ lineData: Data) {
+            guard let line = String(data: lineData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !line.isEmpty else { return }
+
+            if let jsonData = line.data(using: .utf8),
+               let event = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                DispatchQueue.main.async { onEvent(event) }
+            } else {
+                DispatchQueue.main.async { fallback(line) }
+            }
+        }
 
         // Use a background queue for reading to avoid blocking
         DispatchQueue.global(qos: .userInitiated).async {
-            let buffer = NSMutableData()
+            let newline = UInt8(ascii: "\n")
+            var residual = Data()
+
             while true {
                 let data = handle.availableData
                 if data.isEmpty { break } // EOF
 
-                buffer.append(data)
+                var chunk = residual
+                chunk.append(data)
 
-                // Process complete lines
-                while let rangeOfNewline = buffer.rangeOfNewline() {
-                    let lineData = buffer.subdata(with: NSRange(location: 0, length: rangeOfNewline.location))
-                    buffer.replaceBytes(
-                        in: NSRange(location: 0, length: rangeOfNewline.location + rangeOfNewline.length),
-                        withBytes: nil,
-                        length: 0
-                    )
-
-                    guard let line = String(data: lineData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                          !line.isEmpty else { continue }
-
-                    if let jsonData = line.data(using: .utf8),
-                       let event = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-                        DispatchQueue.main.async { onEvent(event) }
-                    } else {
-                        DispatchQueue.main.async { fallback(line) }
-                    }
+                // Split the whole chunk on '\n' in a single forward pass (tracking a
+                // scan-start offset) instead of re-scanning from byte 0 and shifting
+                // the buffer for every line, which was O(n^2) on chatty output.
+                var lineStart = chunk.startIndex
+                while let newlineIndex = chunk[lineStart...].firstIndex(of: newline) {
+                    handleLine(chunk[lineStart..<newlineIndex])
+                    lineStart = chunk.index(after: newlineIndex)
                 }
+                residual = Data(chunk[lineStart...])
             }
 
             // Flush remaining data
-            if buffer.length > 0,
-               let line = String(data: buffer as Data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !line.isEmpty {
-                if let jsonData = line.data(using: .utf8),
-                   let event = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-                    DispatchQueue.main.async { onEvent(event) }
-                } else {
-                    DispatchQueue.main.async { fallback(line) }
-                }
+            if !residual.isEmpty {
+                handleLine(residual)
             }
         }
     }
@@ -533,11 +544,17 @@ private extension CLISession where Self: AnyObject {
     /// Set up stderr capture, returning the accumulator for reading the final text.
     func setupStderr(_ proc: Process) -> StderrAccumulator {
         let accumulator = StderrAccumulator()
-        guard let handle = proc.standardError as? FileHandle else { return accumulator }
+        guard let pipe = objc_getAssociatedObject(proc, "stderrPipe") as? Pipe else { return accumulator }
+        let handle = pipe.fileHandleForReading
 
         handle.readabilityHandler = { [weak self] fileHandle in
             let data = fileHandle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty else {
+                // EOF: detach so the dispatch source + FileHandle backing this closure
+                // don't leak past this CLI invocation.
+                fileHandle.readabilityHandler = nil
+                return
+            }
             guard let text = String(data: data, encoding: .utf8) else { return }
 
             accumulator.append(text)
@@ -553,6 +570,17 @@ private extension CLISession where Self: AnyObject {
         }
 
         return accumulator
+    }
+
+    /// Defensive fallback for the EOF self-clear in `setupStderr`: detach the stderr
+    /// readabilityHandler if it's somehow still attached when the session is torn
+    /// down (e.g. the process was killed before its pipe reported EOF). Only clears
+    /// the closure reference — never closes the handle — so it can't race a
+    /// use-after-free or truncate stderr that hasn't been delivered yet.
+    func clearStderrHandler() {
+        guard let proc = process,
+              let pipe = objc_getAssociatedObject(proc, "stderrPipe") as? Pipe else { return }
+        pipe.fileHandleForReading.readabilityHandler = nil
     }
 
     /// Send SIGTERM, then SIGINT after 3 seconds if still running.
@@ -614,21 +642,5 @@ enum CLIError: LocalizedError {
         case .emptyPrompt: return "Prompt is empty"
         case .sessionBusy: return "CLI session is busy"
         }
-    }
-}
-
-// MARK: - NSMutableData Helpers
-
-private extension NSMutableData {
-    /// Find the range of the first `\n` byte in the buffer.
-    func rangeOfNewline() -> NSRange? {
-        let bytes = self.bytes.assumingMemoryBound(to: UInt8.self)
-        let length = self.length
-        for i in 0..<length {
-            if bytes[i] == UInt8(ascii: "\n") {
-                return NSRange(location: i, length: 1)
-            }
-        }
-        return nil
     }
 }

@@ -56,7 +56,7 @@ final class QwenStreamingSTTSession: @unchecked Sendable {
             sessionConfig["instructions"] = prompt
         }
 
-        try sendJSON([
+        try await sendJSON([
             "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))",
             "type": "session.update",
             "session": sessionConfig,
@@ -85,11 +85,11 @@ final class QwenStreamingSTTSession: @unchecked Sendable {
     func finish() async throws -> String {
         guard let task else { throw STTError.websocketError("session_not_started") }
 
-        try sendJSON([
+        try await sendJSON([
             "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))_commit",
             "type": "input_audio_buffer.commit",
         ])
-        try sendJSON([
+        try await sendJSON([
             "event_id": "event_\(Int(Date().timeIntervalSince1970 * 1000))_finish",
             "type": "session.finish",
         ])
@@ -131,20 +131,17 @@ final class QwenStreamingSTTSession: @unchecked Sendable {
         return parts.joined(separator: "\n")
     }
 
-    private func sendJSON(_ dict: [String: Any]) throws {
+    private func sendJSON(_ dict: [String: Any]) async throws {
         guard let task else { throw STTError.websocketError("session_not_started") }
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let text = String(data: data, encoding: .utf8) else {
             throw STTError.websocketError("encode_failed")
         }
-        let sem = DispatchSemaphore(value: 0)
-        var sendError: Error?
-        task.send(.string(text)) { error in
-            sendError = error
-            sem.signal()
+        do {
+            try await task.send(.string(text))
+        } catch {
+            throw STTError.websocketError(error.localizedDescription)
         }
-        sem.wait()
-        if let sendError { throw STTError.websocketError(sendError.localizedDescription) }
     }
 
     private func receiveLoop() {

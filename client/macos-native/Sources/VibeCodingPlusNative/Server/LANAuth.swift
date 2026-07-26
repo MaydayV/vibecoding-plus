@@ -4,25 +4,11 @@ import Foundation
 /// HMAC-SHA256 signing and verification for LAN WebSocket authentication.
 ///
 /// Mirrors the Node.js `lan-auth.mjs` protocol: shared-secret HMAC over
-/// pipe-delimited message fields, replay protection via nonce set, and
-/// configurable timestamp freshness window.
+/// pipe-delimited message fields. Replay protection (server challenge nonce
+/// + recent-nonce cache) is handled by `NativeServer`.
 enum LANAuth {
 
     // MARK: - Signing
-
-    /// Signs a hello message (legacy timestamp-based format).
-    ///
-    /// Message format: `"hello|{deviceId}|{boardType}|{ts}|{nonce}"`
-    static func signHelloPayload(
-        secret: String,
-        deviceId: String,
-        boardType: String,
-        nonce: String,
-        timestamp: String
-    ) -> String {
-        let message = "hello|\(deviceId)|\(boardType)|\(timestamp)|\(nonce)"
-        return hmacHex(secret: secret, message: message)
-    }
 
     /// Signs a hello message using server-issued challenge nonce (replay-safe).
     ///
@@ -93,35 +79,6 @@ enum LANAuth {
         }
 
         return constantTimeCompare(lhsData, rhsData)
-    }
-
-    /// Full hello verification: freshness, nonce replay check, and signature match.
-    ///
-    /// On success the nonce is inserted into `usedNonces` to prevent replay.
-    static func verifyHello(
-        secret: String,
-        deviceId: String,
-        boardType: String,
-        nonce: String,
-        timestamp: String,
-        signature: String,
-        usedNonces: inout Set<String>
-    ) -> Bool {
-        guard let tsMs = Int(timestamp) else { return false }
-
-        guard isFreshTimestamp(tsMs) else { return false }
-
-        guard usedNonces.insert(nonce).inserted else { return false }
-
-        let expected = signHelloPayload(
-            secret: secret,
-            deviceId: deviceId,
-            boardType: boardType,
-            nonce: nonce,
-            timestamp: timestamp
-        )
-
-        return signaturesMatch(expected, signature)
     }
 
     // MARK: - Private Helpers

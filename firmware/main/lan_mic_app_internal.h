@@ -82,6 +82,9 @@ extern const int kBatteryPollIntervalMs;
 extern const size_t kCachedTodoStateMaxBytes;
 extern const int64_t kTodoNvsDebounceMs;
 extern const int kProtocolVersion;
+extern const int kOtaProgressStepPct;
+extern const int64_t kOtaProgressIntervalMs;
+extern const int64_t kAudioOutputTailMarginMs;
 
 extern const uint8_t kWifiIcon12x12[];
 extern const size_t kWifiIcon12x12Size;

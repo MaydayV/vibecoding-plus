@@ -317,8 +317,27 @@ bool LanMicApp::IsWifiConnected() const {
     return (xEventGroupGetBits(wifi_event_group_) & kWifiConnectedBit) != 0;
 }
 
+std::shared_ptr<WebSocket> LanMicApp::GetWebSocket() const {
+    std::lock_guard<std::mutex> lock(ws_mutex_);
+    return ws_;
+}
+
+void LanMicApp::SetWebSocket(std::shared_ptr<WebSocket> ws) {
+    std::shared_ptr<WebSocket> previous;
+    {
+        std::lock_guard<std::mutex> lock(ws_mutex_);
+        previous = std::move(ws_);
+        ws_ = std::move(ws);
+    }
+    // Drop the old socket outside the lock: ~WebSocket() tears down the TCP
+    // connection and may block, and we never want to hold ws_mutex_ across a
+    // blocking call.
+    previous.reset();
+}
+
 bool LanMicApp::IsServerConnected() const {
-    return ws_ != nullptr && ws_->IsConnected();
+    const std::shared_ptr<WebSocket> ws = GetWebSocket();
+    return ws != nullptr && ws->IsConnected();
 }
 
 void LanMicApp::StartConnectAttemptAsync() {
@@ -337,6 +356,11 @@ void LanMicApp::StartConnectAttemptAsync() {
     connect_cancel_requested_.store(false, std::memory_order_release);
     connect_attempt_started_ms_.store(esp_timer_get_time() / 1000, std::memory_order_release);
     reconnect_stuck_prompt_ = false;
+
+    // Snapshot everything the task needs while still on the main loop. Must
+    // happen before xTaskCreate() — that call publishes the snapshot to the
+    // new task, and the CAS above guarantees no other task is reading it.
+    PrepareConnectAttemptInput();
 
     if (xTaskCreate([](void* arg) {
             auto* self = static_cast<LanMicApp*>(arg);
@@ -362,11 +386,81 @@ void LanMicApp::StartConnectAttemptAsync() {
     }
 }
 
+// Main loop only. Builds the immutable input for the next connect attempt.
+void LanMicApp::PrepareConnectAttemptInput() {
+    connect_input_.server_uri = server_uri_;
+    connect_input_.cached_server_uri = cached_server_uri_;
+    connect_input_.paired_host_id = GetExpectedDiscoveryHostId();
+    // GetSharedSecret() opens an NVS handle; do it here rather than on the
+    // connect task so NVS access stays on one task.
+    connect_input_.shared_secret = GetSharedSecret();
+    connect_input_.manual_reconnect =
+        manual_reconnect_requested_.exchange(false, std::memory_order_acq_rel);
+    if (connect_input_.manual_reconnect) {
+        // A manual reconnect always rediscovers: drop the remembered URI on the
+        // main loop (the owner) rather than letting the task clear it.
+        server_uri_.clear();
+        connect_input_.server_uri.clear();
+    }
+}
+
+// Connect task only.
+void LanMicApp::PublishDiscoveryOutcome(const DiscoveryOutcome& outcome) {
+    {
+        std::lock_guard<std::mutex> lock(discovery_outcome_mutex_);
+        discovery_outcome_ = outcome;
+    }
+    discovery_outcome_pending_.store(true, std::memory_order_release);
+}
+
+// Main loop only. Applies a discovery result the connect task published.
+void LanMicApp::CommitDiscoveryOutcome() {
+    if (!discovery_outcome_pending_.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    DiscoveryOutcome outcome;
+    {
+        std::lock_guard<std::mutex> lock(discovery_outcome_mutex_);
+        outcome = discovery_outcome_;
+    }
+    if (outcome.ws_url.empty()) {
+        return;
+    }
+
+    server_uri_ = outcome.ws_url;
+    SaveCachedServerUri(server_uri_);
+    SavePairedHost(outcome.host_id, outcome.host_name);
+    // NFC is an I2C device; keeping the write on the main loop means it is
+    // never driven from two tasks at once.
+    RefreshNfcForOfflineSetup(server_uri_, outcome.pair_url);
+}
+
+// Main loop only. Invalidates whichever target source the connect task found
+// stale. Runs after CommitDiscoveryOutcome() so a freshly discovered URI that
+// then failed to connect is still dropped.
+void LanMicApp::ApplyConnectTargetFault() {
+    const ConnectTargetFault fault =
+        connect_target_fault_.exchange(ConnectTargetFault::None, std::memory_order_acq_rel);
+    switch (fault) {
+        case ConnectTargetFault::DiscoveryStale:
+            ESP_LOGW(kLanMicTag, "Discovered URI failed, forcing discovery next round");
+            server_uri_.clear();
+            break;
+        case ConnectTargetFault::CacheStale:
+            ESP_LOGW(kLanMicTag, "Cache connect failed; clearing stale cache and forcing discovery");
+            ClearCachedServerUri();
+            break;
+        case ConnectTargetFault::None:
+            break;
+    }
+}
+
 void LanMicApp::RunConnectAttemptTask() {
     EnsureWebSocketConnected();
     if (connect_cancel_requested_.exchange(false, std::memory_order_acq_rel) && !IsServerConnected()) {
-        ws_.reset();
-        hello_sent_ = false;
+        SetWebSocket(nullptr);
+        hello_sent_.store(false, std::memory_order_release);
     }
 }
 
@@ -379,50 +473,53 @@ bool LanMicApp::EnsureWebSocketConnected() {
         return false;
     }
 
-    const bool manual_reconnect = manual_reconnect_requested_.exchange(false, std::memory_order_acq_rel);
-    if (manual_reconnect) {
-        server_uri_.clear();
-    }
+    // Everything below reads only `input` and locals — never the
+    // discovery-derived members, which the main loop owns.
+    const ConnectAttemptInput& input = connect_input_;
+    const bool manual_reconnect = input.manual_reconnect;
 
-    const char* target_uri = nullptr;
+    std::string target_uri_text;
     const char* target_source = "none";
-    std::string fallback_server_uri;
 #if CONFIG_LAN_DISCOVERY_ENABLED
-    if (!server_uri_.empty()) {
-        target_uri = server_uri_.c_str();
+    if (!input.server_uri.empty()) {
+        target_uri_text = input.server_uri;
         target_source = "discovery";
     } else {
-        DiscoverServerUri();
-        if (!server_uri_.empty()) {
-            target_uri = server_uri_.c_str();
+        DiscoveryOutcome outcome;
+        if (DiscoverServerUri(input, outcome)) {
+            // Hand the result to the main loop, but keep a local copy so this
+            // attempt can connect immediately instead of waiting for the commit.
+            PublishDiscoveryOutcome(outcome);
+            EnqueueNetEvent(PendingNetEvent::DiscoveryFound,
+                            outcome.host_name.empty() ? outcome.ws_url : outcome.host_name);
+            target_uri_text = outcome.ws_url;
             target_source = "discovery";
-        } else if (!cached_server_uri_.empty() && !manual_reconnect) {
-            target_uri = cached_server_uri_.c_str();
+        } else if (!input.cached_server_uri.empty() && !manual_reconnect) {
+            target_uri_text = input.cached_server_uri;
             target_source = "cache";
         }
     }
 #else
-    if (!server_uri_.empty()) {
-        target_uri = server_uri_.c_str();
+    if (!input.server_uri.empty()) {
+        target_uri_text = input.server_uri;
         target_source = "configured";
-    } else if (!cached_server_uri_.empty() && !manual_reconnect) {
-        target_uri = cached_server_uri_.c_str();
+    } else if (!input.cached_server_uri.empty() && !manual_reconnect) {
+        target_uri_text = input.cached_server_uri;
         target_source = "cache";
     }
 #endif
 
-    if (target_uri == nullptr) {
-        fallback_server_uri = GetFallbackServerUri();
-        if (!fallback_server_uri.empty()) {
-            target_uri = fallback_server_uri.c_str();
+    if (target_uri_text.empty()) {
+        target_uri_text = GetFallbackServerUri();
+        if (!target_uri_text.empty()) {
             target_source = "fallback";
         }
     }
 
-    if (target_uri == nullptr) {
-        status_text_ = "正在查找主机";
-        hint_text_ = GetDiscoveryHintText();
-        UpdateDisplay();
+    if (target_uri_text.empty()) {
+        // Runs on the "lan_reconnect" task: never touch UI state or the
+        // e-paper directly, let the main loop apply it.
+        EnqueueNetEvent(PendingNetEvent::ConnectSearching);
         return false;
     }
 
@@ -436,72 +533,92 @@ bool LanMicApp::EnsureWebSocketConnected() {
         return false;
     }
 
-    const std::string target_uri_text = target_uri;
     ESP_LOGI(kLanMicTag, "Connecting via %s: %s", target_source, target_uri_text.c_str());
 
-    ws_ = network->CreateWebSocket(0);
-    ws_->OnConnected([this, target_uri_text]() {
+    // Build the socket locally first, then publish it under ws_mutex_ so the
+    // main loop never observes a half-configured socket.
+    std::shared_ptr<WebSocket> ws = network->CreateWebSocket(0);
+    if (ws == nullptr) {
+        ESP_LOGE(kLanMicTag, "CreateWebSocket returned null");
+        return false;
+    }
+    ws->OnConnected([this, target_uri_text]() {
         ESP_LOGI(kLanMicTag, "WebSocket connected");
         pending_connect_uri_ = target_uri_text;
         ws_connected_pending_.store(true, std::memory_order_release);
     });
-    ws_->OnDisconnected([this]() {
+    ws->OnDisconnected([this]() {
         ESP_LOGW(kLanMicTag, "WebSocket disconnected");
         ws_disconnected_pending_.store(true, std::memory_order_release);
     });
-    ws_->OnError([this](int error) {
+    ws->OnError([this](int error) {
         ESP_LOGW(kLanMicTag, "WebSocket error=%d", error);
         ws_error_code_.store(error, std::memory_order_release);
         ws_error_pending_.store(true, std::memory_order_release);
     });
-    ws_->OnData([this](const char* data, size_t len, bool binary) {
+    ws->OnData([this](const char* data, size_t len, bool binary) {
         if (!binary && data != nullptr && len > 0) {
             EnqueueServerMessage(data, len);
         }
     });
 
     if (connect_cancel_requested_.load(std::memory_order_acquire)) {
-        ws_.reset();
-        hello_sent_ = false;
+        SetWebSocket(nullptr);
+        hello_sent_.store(false, std::memory_order_release);
         return false;
     }
 
-    if (!ws_->Connect(target_uri)) {
-        ESP_LOGW(kLanMicTag, "WebSocket connect failed: %s", target_uri);
-        ws_.reset();
-        hello_sent_ = false;
-        if (std::strcmp(target_source, "discovery") == 0) {
-            ESP_LOGW(kLanMicTag, "Discovered URI failed, forcing discovery next round");
-            server_uri_.clear();
-        } else if (std::strcmp(target_source, "cache") == 0) {
-            ESP_LOGW(kLanMicTag, "Cache connect failed; clearing stale cache and forcing discovery");
-            ClearCachedServerUri();
-        }
-        status_text_ = "连接失败";
-        hint_text_ = target_uri;
-        UpdateDisplay();
-        return false;
-    }
-
-    hello_sent_ = false;
+    // Reset the per-connection handshake state *before* the socket goes live.
+    // Doing it after Connect() would race the main loop: OnConnected() fires
+    // from inside Connect(), so the server's auth_challenge can already have
+    // been received and stored by the time we got back here — clearing it then
+    // would silently wipe the nonce SendHello() needs.
+    hello_sent_.store(false, std::memory_order_release);
     auth_server_nonce_.clear();
     auth_challenge_received_ = false;
+
+    // Publish before Connect(): OnConnected() fires from inside Connect() and
+    // the main loop must find the socket installed when it reacts to it.
+    // IsConnected() stays false until the handshake completes, so the main loop
+    // cannot Send() on a socket that has no TCP yet.
+    SetWebSocket(ws);
+
+    if (!ws->Connect(target_uri_text.c_str())) {
+        ESP_LOGW(kLanMicTag, "WebSocket connect failed: %s", target_uri_text.c_str());
+        SetWebSocket(nullptr);
+        hello_sent_.store(false, std::memory_order_release);
+        // Record which source was stale; the main loop owns server_uri_ /
+        // cached_server_uri_ and performs the actual invalidation.
+        if (std::strcmp(target_source, "discovery") == 0) {
+            connect_target_fault_.store(ConnectTargetFault::DiscoveryStale, std::memory_order_release);
+        } else if (std::strcmp(target_source, "cache") == 0) {
+            connect_target_fault_.store(ConnectTargetFault::CacheStale, std::memory_order_release);
+        }
+        EnqueueNetEvent(PendingNetEvent::ConnectFailed, target_uri_text);
+        return false;
+    }
+
     return true;
 }
 
-bool LanMicApp::DiscoverServerUri() {
+// Runs on the "lan_reconnect" task. Pure with respect to LanMicApp state: it
+// reads only `input` plus board identity and returns the result in `out`. The
+// main loop commits it via CommitDiscoveryOutcome().
+bool LanMicApp::DiscoverServerUri(const ConnectAttemptInput& input, DiscoveryOutcome& out) {
 #if !CONFIG_LAN_DISCOVERY_ENABLED
+    (void)input;
+    (void)out;
     return false;
 #else
     if (!IsWifiConnected()) {
         return false;
     }
 
-    if (!server_uri_.empty()) {
-        return true;
-    }
+    // The shared secret was read from NVS on the main loop and handed over in
+    // the snapshot; the receive loop below runs per inbound packet.
+    const std::string& shared_secret = input.shared_secret;
 
-    auto discover_with_host_filter = [this](const std::string& requested_host_id) -> bool {
+    auto discover_with_host_filter = [this, &shared_secret, &out](const std::string& requested_host_id) -> bool {
         cJSON* request = cJSON_CreateObject();
         const std::string nonce = MakeAuthNonce();
         cJSON_AddStringToObject(request, "type", LAN_MSG_DEVICE_DISCOVER_HOST);
@@ -618,11 +735,11 @@ bool LanMicApp::DiscoverServerUri() {
                 const bool host_ok = requested_host_id.empty() ||
                                      (host_id != nullptr && requested_host_id == host_id);
                 bool auth_ok = true;
-                if (!GetSharedSecret().empty()) {
+                if (!shared_secret.empty()) {
                     if (reply_nonce == nullptr || auth_sig == nullptr || nonce != reply_nonce) {
                         auth_ok = false;
                     } else {
-                        const auto expected = HmacSha256Hex({
+                        const auto expected = HmacSha256Hex(shared_secret, {
                             "discover_reply",
                             host_id != nullptr ? host_id : "",
                             host_name != nullptr ? host_name : "",
@@ -634,17 +751,17 @@ bool LanMicApp::DiscoverServerUri() {
                 }
 
                 if (type_ok && service_ok && host_ok && auth_ok && ws_url != nullptr && ws_url[0] != '\0') {
-                    server_uri_ = ws_url;
-                    SaveCachedServerUri(server_uri_);
-                    SavePairedHost(host_id != nullptr ? host_id : "",
-                                   host_name != nullptr ? host_name : "");
+                    // Fill the out-param only; committing to server_uri_ /
+                    // cached_server_uri_ / paired_host_* / NFC is the main
+                    // loop's job (CommitDiscoveryOutcome).
                     const char* pair_url = GetJsonString(response, "pairUrl");
-                    RefreshNfcForOfflineSetup(
-                        server_uri_,
-                        pair_url != nullptr ? std::string(pair_url) : "");
-                    status_text_ = "发现主机";
-                    hint_text_ = (host_name != nullptr && host_name[0] != '\0') ? host_name : server_uri_;
-                    ESP_LOGI(kLanMicTag, "Discovered host: %s (%s)", server_uri_.c_str(), hint_text_.c_str());
+                    out.ws_url = ws_url;
+                    out.host_id = host_id != nullptr ? host_id : "";
+                    out.host_name = host_name != nullptr ? host_name : "";
+                    out.pair_url = pair_url != nullptr ? pair_url : "";
+                    ESP_LOGI(kLanMicTag, "Discovered host: %s (%s)",
+                             out.ws_url.c_str(),
+                             out.host_name.empty() ? out.ws_url.c_str() : out.host_name.c_str());
                     cJSON_Delete(response);
                     close(sock);
                     cJSON_free(request_text);
@@ -673,7 +790,7 @@ bool LanMicApp::DiscoverServerUri() {
         return false;
     };
 
-    const std::string expected_host_id = GetExpectedDiscoveryHostId();
+    const std::string& expected_host_id = input.paired_host_id;
     if (discover_with_host_filter(expected_host_id)) {
         return true;
     }
@@ -703,7 +820,13 @@ std::string LanMicApp::MakeAuthNonce() const {
 }
 
 std::string LanMicApp::HmacSha256Hex(const std::vector<std::string>& parts) const {
-    const std::string secret = GetSharedSecret();
+    return HmacSha256Hex(GetSharedSecret(), parts);
+}
+
+// Static: takes the secret explicitly so the connect task can sign using the
+// snapshot instead of re-opening NVS off the main loop.
+std::string LanMicApp::HmacSha256Hex(const std::string& secret,
+                                     const std::vector<std::string>& parts) {
     if (secret.empty()) {
         return "";
     }
@@ -784,8 +907,8 @@ void LanMicApp::EnterWifiSetupMode() {
 void LanMicApp::DisconnectWebSocket() {
     if (connect_attempt_running_.load(std::memory_order_acquire) && !IsServerConnected()) {
         connect_cancel_requested_.store(true, std::memory_order_release);
-    } else if (ws_ != nullptr) {
-        ws_.reset();
+    } else {
+        SetWebSocket(nullptr);
     }
     hello_sent_ = false;
     preroll_frames_.clear();

@@ -279,6 +279,31 @@ void LanMicApp::PlayBeep(int freq_hz, int duration_ms) {
     }
     codec_->EnableOutput(true);
     codec_->OutputData(pcm);
+
+    // OutputData() only returns once every sample has been handed to the I2S
+    // DMA — up to one full DMA buffer may still be unplayed at this point, so
+    // powering the amp down right here would clip the tail. Schedule the
+    // shutdown instead; ServiceAudioOutput() performs it from the main loop so
+    // back-to-back beeps simply extend the deadline.
+    const int dma_buffer_ms =
+        (AUDIO_CODEC_DMA_DESC_NUM * AUDIO_CODEC_DMA_FRAME_NUM * 1000) / sample_rate;
+    const int64_t tail_ms =
+        std::min(duration_ms, dma_buffer_ms) + kAudioOutputTailMarginMs;
+    const int64_t off_at_ms = (esp_timer_get_time() / 1000) + tail_ms;
+    audio_output_off_at_ms_ = std::max(audio_output_off_at_ms_, off_at_ms);
+}
+
+void LanMicApp::ServiceAudioOutput(int64_t now_ms) {
+    if (audio_output_off_at_ms_ == 0 || codec_ == nullptr) {
+        return;
+    }
+    if (now_ms < audio_output_off_at_ms_) {
+        return;
+    }
+    audio_output_off_at_ms_ = 0;
+    // Initialize() leaves the output disabled; keep the amp off between beeps
+    // so it does not idle powered for the rest of the session.
+    codec_->EnableOutput(false);
 }
 
 void LanMicApp::DrawHorizontalLine(int y, int thickness) {
